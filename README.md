@@ -1,94 +1,104 @@
-# HYDRA-V
-## Recovery Intelligence Layer for Hydrawav3
+﻿# HYDRA-V
+## Feature 1-4 Runtime (Hybrid JS + Python)
 
-## What HYDRA-V Is
-HYDRA-V is a practitioner-first software layer that sits on top of Hydrawav3 hardware and turns sessions into an intelligent **Know -> Act -> Learn** loop.
+This project now runs a hybrid architecture:
+1. **Frontend (JS)** for real-time camera UI, pose overlay, neural ghost rendering, and session controls.
+2. **Node runtime (`server.js`)** for secure API proxies (HydraWav + ElevenLabs + Python analytics bridge).
+3. **Python analytics service** for higher-quality Aura-Scan signal processing and optional RuView vitals fusion.
 
-Instead of relying on intuition, HYDRA-V gives practitioners:
-- Fast objective intake before a session
-- Personalized protocol guidance during a session
-- Continuous outcome tracking between visits
+All 4 features remain integrated.
 
-## The Problem We Are Solving
-Hydrawav3’s track brief highlights three gaps:
-1. **Before session (Know):** No fast objective way to understand each body
-2. **During session (Act):** Protocol selection still depends on guesswork
-3. **After session (Learn):** No strong continuity loop to compound outcomes
+## Features
 
-HYDRA-V addresses all three.
+### Feature 1 - Aura-Scan+
+- MediaPipe Pose + FaceMesh capture in browser.
+- Forehead rPPG sampling and eye motion telemetry.
+- Python analytics path (optional but enabled by default):
+  - HR estimation (Welch + bandpass)
+  - RR + RMSSD HRV
+  - micro-saccade rate
+  - readiness score
+  - optional RuView heart/breath fusion
+- Automatic fallback to local JS metrics if Python service is unavailable.
 
-## Core Product Vision
-HYDRA-V has 7 feature pillars:
-1. Aura-Scan+ (camera-based intake)
-2. Neural Handshake (mirror-neuron priming)
-3. Cardiac Gating+ (heartbeat-synced delivery)
-4. Neuroacoustic Entrainment (state-aware audio guidance)
-5. Fascial Thermal Mapping (camera-derived placement intelligence)
-6. Solace Digital Garden+ (gamified continuity)
-7. Adaptive Protocol AI (N-of-1 protocol optimization)
+### Feature 2 - Neural Handshake
+- Records healthy-side motion and mirrors to injured side as glowing ghost.
+- Auto-target from Aura-Scan flagged cold zone.
 
-## What We Are Building for GlobeHack (18-Hour MVP)
-To ship reliably in hackathon time, we are building a focused MVP:
+### Feature 3 - Cardiac Gating+
+- T-wave pulse scheduling (`80-120 ms` offset).
+- BLE transport support.
+- HydraWav official login/publish API support.
 
-1. **Aura-Scan Lite (Know)**
-- 60-second camera intake
-- Pose asymmetry scoring (shoulder/hip/knee)
-- Readiness score (simple rPPG/biometric proxy + fallback manual input)
-- Flagged zone body map
+### Feature 4 - Neuroacoustic Entrainment
+- Adaptive binaural phases (`pre -> during -> post`).
+- ElevenLabs narration integration.
 
-2. **Protocol Copilot (Act)**
-- One-screen protocol recommendation
-- Practitioner confirm/adjust in under 2 minutes
-- Session card: modality mix, intensity, sequence, duration
+## Run
 
-3. **Session Voice Assistant (Act/Learn)**
-- ElevenLabs generated pre-session brief (vitals + plan)
-- ElevenLabs generated post-session summary (what changed + next steps)
+### 1) Node runtime
+```bash
+npm start
+```
+Or:
+```bash
+node server.js
+```
 
-4. **Outcome + Continuity Layer (Learn)**
-- Before/after capture (pain, ROM, subjective readiness)
-- Recovery score + streak
-- Solace Garden Lite growth visualization tied to outcomes
-- Practitioner trend view (session history and progress)
+### 2) Python analytics service (recommended)
+```bash
+cd python_service
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
+```
 
-## Feature-to-Phase Mapping
-### Know
-- Feature 1: Aura-Scan+
-- Feature 5: Fascial Thermal Mapping (assessment output)
+Default Python API: `http://127.0.0.1:8010`
 
-### Act
-- Feature 2: Neural Handshake
-- Feature 3: Cardiac Gating+
-- Feature 4: Neuroacoustic Entrainment
-- Feature 5: Fascial Thermal Mapping (placement guidance)
-- Feature 7: Adaptive Protocol AI (recommend + confirm)
+### 3) Open app
+- `http://localhost:3000`
 
-### Learn
-- Feature 6: Solace Digital Garden+
-- Feature 7: Adaptive Protocol AI (post-session learning loop)
-- ElevenLabs post-session continuity note
+## Env Variables
 
-## Demo Flow (Judge-Facing)
-1. Run 60-second Aura-Scan
-2. Show readiness + asymmetry + flagged zones
-3. Generate and confirm personalized protocol
-4. Run session with voice guidance
-5. Capture before/after outcomes
-6. Show recovery score, garden growth, and next-session suggestion
+Set these in `.env`:
 
-## Why This Can Win
-- Covers full **Know -> Act -> Learn** loop
-- Strong practitioner-first workflow (fast, low-friction decisions)
-- Clear personalization (not one-size-fits-all)
-- Measurable continuity between visits
-- Memorable user experience through voice + visual progress
+- `PORT=3000`
+- `ELEVENLABS_API_KEY=...`
+- `ELEVENLABS_VOICE_ID=...` (optional)
+- `ELEVENLABS_MODEL_ID=...` (optional)
+- `HYDRAWAV_API_BASE_URL=https://...`
 
-## Build Guardrails (Important)
-- Wellness positioning only (no diagnosis/treatment claims)
-- Use terms like **supports recovery, mobility, performance**
-- Keep practitioner interaction under 2 minutes per decision point
-- Ensure all outputs are explainable and actionable
+Hybrid analytics:
+- `PY_AURA_API_BASE_URL=http://127.0.0.1:8010`
+- `AURA_USE_PYTHON_ANALYTICS=true`
+- `AURA_PYTHON_TIMEOUT_MS=1500`
 
-## One-Line Pitch
-HYDRA-V turns Hydrawav3 from a powerful device into an adaptive recovery intelligence system: understand in 60 seconds, personalize in one tap, and improve every visit.
+Optional RuView fusion (Python service reads these):
+- `RUVIEW_API_BASE_URL=`
+- `RUVIEW_VITALS_PATH=/api/v1/vital-signs`
+- `RUVIEW_TIMEOUT_MS=1200`
 
+## Key Endpoints
+
+Node:
+- `GET /api/health`
+- `POST /api/voice/elevenlabs/tts`
+- `POST /api/device/hydrawav/login`
+- `POST /api/device/hydrawav/publish`
+- `POST /api/aura/reset` (proxy to Python)
+- `POST /api/aura/analyze` (proxy to Python)
+
+Python:
+- `GET /health`
+- `POST /aura/reset`
+- `POST /aura/analyze`
+
+## Bridge Contract
+
+`window.HydraVBridge` still exposes the full control surface for Features 1-4 and is backward compatible with previous integration methods.
+
+## Notes
+- Wellness-support software only (no diagnosis claims).
+- HydraWav payloads must be stringified JSON.
+- If Python service is down, Aura-Scan still runs via JS fallback.

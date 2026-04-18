@@ -1,0 +1,16 @@
+﻿# Node
+node_modules/
+
+# Secrets
+.env
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+python_service/.venv/
+python_service/__pycache__/
+python_service/app/__pycache__/
+*.pyc
