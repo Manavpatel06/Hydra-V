@@ -1,0 +1,105 @@
+import React, { useRef, useState, useEffect } from 'react';
+import Spline from '@splinetool/react-spline';
+import { Pose } from '@mediapipe/pose';
+import * as cam from '@mediapipe/camera_utils';
+
+export default function HydraV() {
+  const splineRef = useRef();
+  const webcamRef = useRef(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // 1. Initialize Spline App
+  function onLoad(splineApp) {
+    splineRef.current = splineApp;
+    setIsLoaded(true);
+    console.log("Spline Loaded. Neural Sync Initialized.");
+  }
+
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    // 2. Setup MediaPipe Pose
+    const pose = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+    });
+
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    pose.onResults((results) => {
+      if (!results.poseLandmarks || !splineRef.current) return;
+
+      // --- BONE MAPPING (Targeting your specific hierarchy) ---
+      const leftArm = splineRef.current.findObjectByName('LeftArm');
+      const leftForeArm = splineRef.current.findObjectByName('LeftForeArm');
+      const leftHand = splineRef.current.findObjectByName('LeftHand');
+
+      // --- MIRROR LOGIC: HUMAN RIGHT -> AVATAR LEFT ---
+      const rs = results.poseLandmarks[12]; // Right Shoulder
+      const re = results.poseLandmarks[14]; // Right Elbow
+      const rw = results.poseLandmarks[16]; // Right Wrist
+
+      if (leftArm && rs && re && rw) {
+        // Calculate Upper Arm Rotation
+        const angleUpper = Math.atan2(re.y - rs.y, re.x - rs.x);
+        leftArm.rotation.z = angleUpper + Math.PI / 2;
+
+        // Calculate Forearm Rotation relative to Upper Arm
+        const angleFore = Math.atan2(rw.y - re.y, rw.x - re.x);
+        leftForeArm.rotation.z = angleFore - angleUpper;
+
+        // Fix Static Hand: Ensure it follows the wrist line
+        if (leftHand) {
+          leftHand.rotation.z = 0.2; 
+        }
+      }
+
+      // --- OPTIONAL: HEARTBEAT EMISSIVE PULSE ---
+      // If your Spline materials have 'Emissive' properties, they will pulse
+      const pulse = Math.sin(Date.now() * 0.005) * 0.5 + 0.5;
+      const materials = splineRef.current.getAllObjects().filter(obj => obj.type === 'Material');
+      materials.forEach(mat => {
+          if(mat.emissiveIntensity) mat.emissiveIntensity = pulse * 2;
+      });
+    });
+
+    // 3. Setup Camera
+    if (webcamRef.current) {
+      const camera = new cam.Camera(webcamRef.current, {
+        onFrame: async () => {
+          await pose.send({ image: webcamRef.current });
+        },
+        width: 640,
+        height: 480
+      });
+      camera.start();
+    }
+  }, [isLoaded]);
+
+  return (
+    <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#000' }}>
+      {/* Hidden Webcam Processing Feed */}
+      <video ref={webcamRef} style={{ display: 'none' }} />
+      
+      {/* THE LIVE SPLINE TEMPLATE */}
+      <Spline 
+        scene="https://prod.spline.design/8yRm8xEBLtMg0FLZ/scene.splinecode" 
+        onLoad={onLoad} 
+      />
+
+      {/* MINIMALIST OVERLAY */}
+      <div style={{
+        position: 'absolute', top: 40, left: 40, color: 'white', pointerEvents: 'none',
+        fontFamily: 'sans-serif', textTransform: 'uppercase', letterSpacing: '2px'
+      }}>
+        <h1 style={{ fontWeight: 300, margin: 0 }}>HYDRA-V</h1>
+        <div style={{ height: '2px', background: 'cyan', width: '40px', margin: '10px 0' }} />
+        <p style={{ opacity: 0.5, fontSize: '12px' }}>Neural Handshake Active</p>
+      </div>
+    </div>
+  );
+}
