@@ -108,5 +108,5 @@ Python service endpoints:
 
 ## Teammates
 - Manav
-- Deep Nayak
 - Riya Attri
+- Deep Nayak
