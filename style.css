@@ -215,7 +215,7 @@ h1 {
 .body-map-wrap {
   border-radius: 12px;
   border: 1px solid #9dc0ce;
-  min-height: 220px;
+  min-height: 430px;
   display: grid;
   place-items: center;
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(226, 241, 248, 0.7));
@@ -224,7 +224,7 @@ h1 {
 
 .bodymap-canvas {
   width: 100%;
-  max-width: 320px;
+  max-width: 300px;
   height: auto;
 }
 
@@ -259,7 +259,7 @@ h1 {
 .camera-stage {
   position: relative;
   overflow: hidden;
-  min-height: 620px;
+  min-height: 660px;
   border-radius: 14px;
   border: 1px solid #9fc2d0;
   background: linear-gradient(150deg, #062331, #0e445b);
@@ -274,6 +274,7 @@ h1 {
 }
 
 .camera-canvas,
+.virtual-game-canvas,
 .thermal-canvas,
 .ghost-canvas,
 .game-canvas {
@@ -289,16 +290,55 @@ h1 {
   pointer-events: none;
 }
 
-.thermal-canvas {
-  z-index: 2;
+.virtual-game-canvas {
+  z-index: 1;
+  pointer-events: none;
 }
 
-.ghost-canvas {
+.camera-canvas {
+  z-index: 1;
+}
+
+.thermal-canvas {
   z-index: 3;
 }
 
-.game-canvas {
+.ghost-canvas {
   z-index: 4;
+}
+
+.game-canvas {
+  z-index: 5;
+}
+
+.camera-stage.game-mode .overlay-metrics.aura-left,
+.camera-stage.game-mode .overlay-metrics.aura-right {
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+}
+
+.camera-stage.game-mode .overlay-metrics.telemetry-bottom {
+  opacity: 0;
+  transform: translateX(-50%) translateY(36px);
+  pointer-events: none;
+}
+
+.camera-stage.game-mode .stage-chip.left {
+  opacity: 0.25;
+}
+
+.camera-stage.game-mode .game-canvas {
+  z-index: 10;
+}
+
+.camera-stage.game-mode .camera-canvas {
+  opacity: 0.2;
+}
+
+.camera-stage.game-mode .virtual-game-canvas {
+  z-index: 2;
+  opacity: 1;
 }
 
 .stage-chip {
@@ -561,6 +601,12 @@ button:disabled {
 .summary-card h4 {
   font-size: 0.88rem;
   margin: 10px 0 6px;
+}
+
+.summary-analysis-text {
+  font-size: 0.86rem;
+  color: var(--text-soft);
+  line-height: 1.5;
 }
 
 .text-list {

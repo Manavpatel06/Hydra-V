@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 500">
+  <defs>
+    <style>
+      .body { fill: #b9bcc1; }
+      .line { stroke: #eef0f2; stroke-width: 1.6; fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: 0.9; }
+      .sub { stroke: #e3e6ea; stroke-width: 1.2; fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: 0.8; }
+    </style>
+  </defs>
+
+  <!-- head -->
+  <ellipse class="body" cx="105" cy="50" rx="24" ry="33"/>
+  <path class="line" d="M95 78 L115 78"/>
+
+  <!-- neck -->
+  <path class="body" d="M94 82 L116 82 L113 99 L97 99 Z"/>
+
+  <!-- torso -->
+  <path class="body" d="M60 103 C72 93 89 94 105 95 C121 94 138 93 150 103 C160 114 160 132 155 153 C149 178 139 206 128 232 C121 248 114 260 105 267 C96 260 89 248 82 232 C71 206 61 178 55 153 C50 132 50 114 60 103 Z"/>
+
+  <!-- left arm -->
+  <path class="body" d="M56 116 C44 128 39 143 37 162 C35 181 36 204 41 227 C43 236 49 244 57 246 C66 248 74 242 76 233 C80 216 80 198 79 180 C78 156 74 134 66 119 C63 114 59 113 56 116 Z"/>
+  <ellipse class="body" cx="58" cy="268" rx="13" ry="16"/>
+  <!-- right arm -->
+  <path class="body" d="M154 116 C166 128 171 143 173 162 C175 181 174 204 169 227 C167 236 161 244 153 246 C144 248 136 242 134 233 C130 216 130 198 131 180 C132 156 136 134 144 119 C147 114 151 113 154 116 Z"/>
+  <ellipse class="body" cx="152" cy="268" rx="13" ry="16"/>
+
+  <!-- pelvis -->
+  <path class="body" d="M83 244 C90 237 97 234 105 234 C113 234 120 237 127 244 C131 248 131 258 127 265 C121 275 114 282 105 287 C96 282 89 275 83 265 C79 258 79 248 83 244 Z"/>
+
+  <!-- left leg -->
+  <path class="body" d="M83 279 C74 292 68 311 64 334 C61 352 59 372 60 392 C61 410 71 426 84 427 C97 428 106 413 107 395 C109 372 106 346 102 322 C99 303 94 286 87 276 C85 274 84 276 83 279 Z"/>
+  <ellipse class="body" cx="86" cy="448" rx="17" ry="10"/>
+  <!-- right leg -->
+  <path class="body" d="M127 279 C136 292 142 311 146 334 C149 352 151 372 150 392 C149 410 139 426 126 427 C113 428 104 413 103 395 C101 372 104 346 108 322 C111 303 116 286 123 276 C125 274 126 276 127 279 Z"/>
+  <ellipse class="body" cx="124" cy="448" rx="17" ry="10"/>
+
+  <!-- torso lines -->
+  <path class="line" d="M70 124 C83 118 95 116 105 116 C115 116 127 118 140 124"/>
+  <path class="line" d="M66 146 C80 139 93 136 105 136 C117 136 130 139 144 146"/>
+  <path class="line" d="M68 170 C82 163 93 161 105 161 C117 161 128 163 142 170"/>
+  <path class="line" d="M72 193 C84 187 94 185 105 185 C116 185 126 187 138 193"/>
+  <path class="line" d="M78 215 C88 210 96 208 105 208 C114 208 122 210 132 215"/>
+  <path class="line" d="M87 238 C94 233 99 230 105 230 C111 230 116 233 123 238"/>
+
+  <!-- shoulder/neck lines -->
+  <path class="line" d="M90 96 L78 118"/>
+  <path class="line" d="M120 96 L132 118"/>
+  <path class="sub" d="M105 98 L105 230"/>
+  <path class="sub" d="M95 139 L95 229"/>
+  <path class="sub" d="M115 139 L115 229"/>
+
+  <!-- arm inner lines -->
+  <path class="sub" d="M58 126 C51 144 49 165 50 187 C51 209 55 225 61 236"/>
+  <path class="sub" d="M152 126 C159 144 161 165 160 187 C159 209 155 225 149 236"/>
+  <path class="sub" d="M52 257 C57 260 60 266 61 274"/>
+  <path class="sub" d="M158 257 C153 260 150 266 149 274"/>
+
+  <!-- leg inner lines -->
+  <path class="sub" d="M89 284 C82 301 79 321 79 344 C79 366 81 386 85 406"/>
+  <path class="sub" d="M121 284 C128 301 131 321 131 344 C131 366 129 386 125 406"/>
+  <path class="sub" d="M80 438 L91 438"/>
+  <path class="sub" d="M118 438 L129 438"/>
+</svg>

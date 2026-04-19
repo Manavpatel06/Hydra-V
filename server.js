@@ -43,7 +43,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/health") {
       json(res, 200, {
         ok: true,
-        service: "HYDRA-V Feature 1-5 runtime",
+        service: "HYDRA-V runtime",
         elevenLabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY),
         hydrawavApiBaseUrlConfigured: Boolean(HYDRAWAV_DEFAULT_BASE_URL),
         hydrawavCredentialsConfigured: Boolean(HYDRAWAV_DEFAULT_USERNAME && HYDRAWAV_DEFAULT_PASSWORD),
@@ -129,11 +129,22 @@ async function handleElevenLabsTts(req, res) {
 
   const voiceId = body.voiceId || process.env.ELEVENLABS_VOICE_ID || "EXAVITQu4vr4xnSDxMaL";
   const modelId = body.modelId || process.env.ELEVENLABS_MODEL_ID || "eleven_turbo_v2_5";
-  const voiceSettings = body.voiceSettings || {
-    stability: 0.45,
-    similarityBoost: 0.8,
-    style: 0.2,
-    useSpeakerBoost: true
+  const incomingSettings = body.voiceSettings && typeof body.voiceSettings === "object"
+    ? body.voiceSettings
+    : {};
+  const voiceSettings = {
+    stability: Number.isFinite(Number(incomingSettings.stability))
+      ? Number(incomingSettings.stability)
+      : 0.45,
+    similarity_boost: Number.isFinite(Number(incomingSettings.similarity_boost ?? incomingSettings.similarityBoost))
+      ? Number(incomingSettings.similarity_boost ?? incomingSettings.similarityBoost)
+      : 0.8,
+    style: Number.isFinite(Number(incomingSettings.style))
+      ? Number(incomingSettings.style)
+      : 0.2,
+    use_speaker_boost: typeof (incomingSettings.use_speaker_boost ?? incomingSettings.useSpeakerBoost) === "boolean"
+      ? Boolean(incomingSettings.use_speaker_boost ?? incomingSettings.useSpeakerBoost)
+      : true
   };
 
   const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=mp3_44100_128`;

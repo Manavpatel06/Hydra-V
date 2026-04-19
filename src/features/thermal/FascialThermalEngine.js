@@ -4,6 +4,20 @@ import { clamp, round } from "../../core/utils.js";
 const DEFAULT_SCAN_DURATION_SEC = 8;
 const DEFAULT_SAMPLE_FPS = 10;
 const DEFAULT_MAX_FRAMES = 96;
+const POSE_IDX = Object.freeze({
+  leftShoulder: 11,
+  rightShoulder: 12,
+  leftElbow: 13,
+  rightElbow: 14,
+  leftWrist: 15,
+  rightWrist: 16,
+  leftHip: 23,
+  rightHip: 24,
+  leftKnee: 25,
+  rightKnee: 26,
+  leftAnkle: 27,
+  rightAnkle: 28
+});
 
 export class FascialThermalEngine {
   constructor({
@@ -32,6 +46,10 @@ export class FascialThermalEngine {
 
     this.captureCanvas = document.createElement("canvas");
     this.captureCtx = this.captureCanvas.getContext("2d", { willReadFrequently: false });
+    this.maskCanvas = document.createElement("canvas");
+    this.maskCtx = this.maskCanvas.getContext("2d");
+    this.heatCanvas = document.createElement("canvas");
+    this.heatCtx = this.heatCanvas.getContext("2d");
 
     this.running = false;
     this.analyzing = false;
@@ -245,9 +263,46 @@ export class FascialThermalEngine {
 
     const zones = Array.isArray(overlay.zones) ? overlay.zones : [];
     const padOverlays = Array.isArray(overlay.recommendedPads) ? overlay.recommendedPads : [];
+    const landmarks = this.getPoseLandmarks?.();
+    const pose = this.extractPoseModel(landmarks);
+
+    if (!pose) {
+      for (const zone of zones) {
+        this.drawZoneHeat(this.overlayCtx, zone, { label: true });
+      }
+      for (const pad of padOverlays) {
+        this.drawPadMarker(pad);
+      }
+      return;
+    }
+
+    this.maskCtx.clearRect(0, 0, this.maskCanvas.width, this.maskCanvas.height);
+    this.heatCtx.clearRect(0, 0, this.heatCanvas.width, this.heatCanvas.height);
+
+    this.drawBodySilhouette(this.maskCtx, pose, {
+      fillStyle: "rgba(255,255,255,1)"
+    });
+
+    this.drawBodySilhouette(this.heatCtx, pose, {
+      fillStyle: "rgba(102, 178, 205, 0.13)"
+    });
 
     for (const zone of zones) {
-      this.drawZone(zone);
+      this.drawZoneHeat(this.heatCtx, zone, { label: false });
+    }
+
+    this.heatCtx.globalCompositeOperation = "destination-in";
+    this.heatCtx.drawImage(this.maskCanvas, 0, 0);
+    this.heatCtx.globalCompositeOperation = "source-over";
+
+    this.overlayCtx.drawImage(this.heatCanvas, 0, 0);
+    this.drawBodySilhouette(this.overlayCtx, pose, {
+      outlineStyle: "rgba(163, 225, 245, 0.55)",
+      outlineWidth: 2.2
+    });
+
+    for (const zone of zones) {
+      this.drawZoneHeat(this.overlayCtx, zone, { label: true, ringOnly: true });
     }
 
     for (const pad of padOverlays) {
@@ -255,7 +310,7 @@ export class FascialThermalEngine {
     }
   }
 
-  drawZone(zone) {
+  drawZoneHeat(ctx, zone, { label = true, ringOnly = false } = {}) {
     if (!zone?.anchor || !Array.isArray(zone.anchor)) {
       return;
     }
@@ -270,20 +325,50 @@ export class FascialThermalEngine {
     const radius = clamp(radiusNorm * Math.min(width, height), 16, 96);
     const coldScore = clamp(Number(zone.cold_score) || 0, 0, 1);
 
-    this.overlayCtx.save();
-    this.overlayCtx.globalCompositeOperation = "screen";
-    this.overlayCtx.strokeStyle = `rgba(255, ${Math.round(210 - coldScore * 120)}, ${Math.round(80 - coldScore * 45)}, 0.9)`;
-    this.overlayCtx.fillStyle = `rgba(255, ${Math.round(150 - coldScore * 70)}, ${Math.round(30 + coldScore * 40)}, ${0.12 + coldScore * 0.2})`;
-    this.overlayCtx.lineWidth = 2;
-    this.overlayCtx.beginPath();
-    this.overlayCtx.arc(x, y, radius, 0, Math.PI * 2);
-    this.overlayCtx.fill();
-    this.overlayCtx.stroke();
+    const glowColor = `rgba(255, ${Math.round(212 - coldScore * 124)}, ${Math.round(84 - coldScore * 48)}, 1)`;
+    const ringColor = `rgba(255, ${Math.round(220 - coldScore * 120)}, ${Math.round(70 - coldScore * 40)}, 0.92)`;
 
-    this.overlayCtx.font = "12px JetBrains Mono";
-    this.overlayCtx.fillStyle = "#fef3c7";
-    this.overlayCtx.fillText(`${zone.side} ${zone.zone} ${round(coldScore * 100, 0)}%`, x - radius * 0.6, y - radius - 8);
-    this.overlayCtx.restore();
+    if (!ringOnly) {
+      const gradient = ctx.createRadialGradient(x, y, radius * 0.16, x, y, radius);
+      gradient.addColorStop(0, `rgba(255, ${Math.round(164 - coldScore * 70)}, ${Math.round(48 + coldScore * 50)}, ${0.36 + coldScore * 0.28})`);
+      gradient.addColorStop(0.45, `rgba(255, ${Math.round(130 - coldScore * 45)}, ${Math.round(32 + coldScore * 32)}, ${0.2 + coldScore * 0.15})`);
+      gradient.addColorStop(1, "rgba(255, 90, 35, 0)");
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = ringOnly ? 2.4 : 1.6;
+    ctx.shadowBlur = ringOnly ? 10 : 4;
+    ctx.shadowColor = glowColor;
+    ctx.beginPath();
+    ctx.arc(x, y, ringOnly ? radius * 0.72 : radius * 0.94, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    if (label) {
+      ctx.save();
+      ctx.font = "600 11px JetBrains Mono";
+      const text = `${zone.side} ${zone.zone} ${round(coldScore * 100, 0)}%`;
+      const pad = 6;
+      const textW = ctx.measureText(text).width;
+      const bx = clamp(x - textW * 0.5 - pad, 4, width - textW - pad * 2 - 4);
+      const by = clamp(y - radius - 24, 4, height - 22);
+      ctx.fillStyle = "rgba(12, 26, 35, 0.74)";
+      ctx.strokeStyle = "rgba(173, 226, 245, 0.45)";
+      roundRect(ctx, bx, by, textW + pad * 2, 18, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#fef3c7";
+      ctx.fillText(text, bx + pad, by + 12.5);
+      ctx.restore();
+    }
   }
 
   drawPadMarker(pad) {
@@ -313,6 +398,113 @@ export class FascialThermalEngine {
     this.overlayCtx.fillStyle = "#f8fafc";
     this.overlayCtx.fillText(isSun ? "SUN" : "MOON", x + 14, y + 4);
     this.overlayCtx.restore();
+  }
+
+  extractPoseModel(landmarks) {
+    if (!Array.isArray(landmarks) || landmarks.length <= POSE_IDX.rightAnkle) {
+      return null;
+    }
+
+    const width = this.overlayCanvas.width;
+    const height = this.overlayCanvas.height;
+    const point = (idx) => {
+      const value = landmarks[idx];
+      if (!value || !Number.isFinite(value.x) || !Number.isFinite(value.y)) {
+        return null;
+      }
+      return {
+        x: value.x * width,
+        y: value.y * height
+      };
+    };
+
+    const pose = {
+      leftShoulder: point(POSE_IDX.leftShoulder),
+      rightShoulder: point(POSE_IDX.rightShoulder),
+      leftElbow: point(POSE_IDX.leftElbow),
+      rightElbow: point(POSE_IDX.rightElbow),
+      leftWrist: point(POSE_IDX.leftWrist),
+      rightWrist: point(POSE_IDX.rightWrist),
+      leftHip: point(POSE_IDX.leftHip),
+      rightHip: point(POSE_IDX.rightHip),
+      leftKnee: point(POSE_IDX.leftKnee),
+      rightKnee: point(POSE_IDX.rightKnee),
+      leftAnkle: point(POSE_IDX.leftAnkle),
+      rightAnkle: point(POSE_IDX.rightAnkle)
+    };
+
+    if (!pose.leftShoulder || !pose.rightShoulder || !pose.leftHip || !pose.rightHip) {
+      return null;
+    }
+    return pose;
+  }
+
+  drawBodySilhouette(ctx, pose, { fillStyle = null, outlineStyle = null, outlineWidth = 2 } = {}) {
+    const shoulderCenter = midpoint(pose.leftShoulder, pose.rightShoulder);
+    const hipCenter = midpoint(pose.leftHip, pose.rightHip);
+    const torsoCenter = midpoint(shoulderCenter, hipCenter);
+    const shoulderSpan = distance(pose.leftShoulder, pose.rightShoulder);
+    const hipSpan = distance(pose.leftHip, pose.rightHip);
+    const armWidth = clamp(shoulderSpan * 0.34, 18, 54);
+    const legWidth = clamp(Math.max(hipSpan * 0.33, armWidth * 0.74), 14, 46);
+    const headRadius = clamp(shoulderSpan * 0.3, 16, 46);
+    const headCenter = {
+      x: shoulderCenter.x,
+      y: shoulderCenter.y - headRadius * 1.25
+    };
+
+    const leftShoulder = inflateFromCenter(pose.leftShoulder, torsoCenter, 1.18, 1.1);
+    const rightShoulder = inflateFromCenter(pose.rightShoulder, torsoCenter, 1.18, 1.1);
+    const leftHip = inflateFromCenter(pose.leftHip, torsoCenter, 1.14, 1.08);
+    const rightHip = inflateFromCenter(pose.rightHip, torsoCenter, 1.14, 1.08);
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (fillStyle) {
+      ctx.fillStyle = fillStyle;
+
+      ctx.beginPath();
+      ctx.arc(headCenter.x, headCenter.y, headRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(leftShoulder.x, leftShoulder.y);
+      ctx.lineTo(rightShoulder.x, rightShoulder.y);
+      ctx.lineTo(rightHip.x, rightHip.y);
+      ctx.lineTo(leftHip.x, leftHip.y);
+      ctx.closePath();
+      ctx.fill();
+
+      drawLimbStroke(ctx, [pose.leftShoulder, pose.leftElbow, pose.leftWrist], armWidth, fillStyle);
+      drawLimbStroke(ctx, [pose.rightShoulder, pose.rightElbow, pose.rightWrist], armWidth, fillStyle);
+      drawLimbStroke(ctx, [pose.leftHip, pose.leftKnee, pose.leftAnkle], legWidth, fillStyle);
+      drawLimbStroke(ctx, [pose.rightHip, pose.rightKnee, pose.rightAnkle], legWidth, fillStyle);
+    }
+
+    if (outlineStyle) {
+      ctx.strokeStyle = outlineStyle;
+      ctx.lineWidth = outlineWidth;
+      ctx.beginPath();
+      ctx.arc(headCenter.x, headCenter.y, headRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(leftShoulder.x, leftShoulder.y);
+      ctx.lineTo(rightShoulder.x, rightShoulder.y);
+      ctx.lineTo(rightHip.x, rightHip.y);
+      ctx.lineTo(leftHip.x, leftHip.y);
+      ctx.closePath();
+      ctx.stroke();
+
+      drawLimbOutline(ctx, [pose.leftShoulder, pose.leftElbow, pose.leftWrist], outlineStyle, outlineWidth);
+      drawLimbOutline(ctx, [pose.rightShoulder, pose.rightElbow, pose.rightWrist], outlineStyle, outlineWidth);
+      drawLimbOutline(ctx, [pose.leftHip, pose.leftKnee, pose.leftAnkle], outlineStyle, outlineWidth);
+      drawLimbOutline(ctx, [pose.rightHip, pose.rightKnee, pose.rightAnkle], outlineStyle, outlineWidth);
+    }
+
+    ctx.restore();
   }
 
   clearOverlay() {
@@ -347,6 +539,16 @@ export class FascialThermalEngine {
       this.overlayCanvas.width = width;
       this.overlayCanvas.height = height;
     }
+
+    if (this.maskCanvas.width !== width || this.maskCanvas.height !== height) {
+      this.maskCanvas.width = width;
+      this.maskCanvas.height = height;
+    }
+
+    if (this.heatCanvas.width !== width || this.heatCanvas.height !== height) {
+      this.heatCanvas.width = width;
+      this.heatCanvas.height = height;
+    }
   }
 
   cleanupTimers() {
@@ -367,4 +569,72 @@ export class FascialThermalEngine {
   getLatestResult() {
     return this.lastResult;
   }
+}
+
+function distance(a, b) {
+  if (!a || !b) {
+    return 0;
+  }
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function midpoint(a, b) {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2
+  };
+}
+
+function inflateFromCenter(point, center, sx = 1, sy = 1) {
+  return {
+    x: center.x + (point.x - center.x) * sx,
+    y: center.y + (point.y - center.y) * sy
+  };
+}
+
+function drawLimbStroke(ctx, points, lineWidth, color) {
+  const valid = points.filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (valid.length < 2) {
+    return;
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.moveTo(valid[0].x, valid[0].y);
+  for (let i = 1; i < valid.length; i += 1) {
+    ctx.lineTo(valid[i].x, valid[i].y);
+  }
+  ctx.stroke();
+}
+
+function drawLimbOutline(ctx, points, color, lineWidth) {
+  const valid = points.filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (valid.length < 2) {
+    return;
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.moveTo(valid[0].x, valid[0].y);
+  for (let i = 1; i < valid.length; i += 1) {
+    ctx.lineTo(valid[i].x, valid[i].y);
+  }
+  ctx.stroke();
+}
+
+function roundRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }

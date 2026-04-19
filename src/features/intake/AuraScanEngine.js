@@ -8,6 +8,13 @@ import {
   mean,
   rmssd
 } from "./SignalProcessing.js";
+import {
+  buildCanonicalPose,
+  drawAnatomyFigure,
+  drawZoneHighlight
+} from "../visual/AnatomyFigureRenderer.js";
+
+const BODY_SILHOUETTE_URL = "/src/assets/anatomy-silhouette.svg";
 
 const DEFAULT_SCAN_SECONDS = 60;
 
@@ -37,6 +44,15 @@ export class AuraScanEngine {
     this.cameraCtx = this.cameraCanvas.getContext("2d");
     this.bodyMapCanvas = bodyMapCanvasEl;
     this.bodyMapCtx = this.bodyMapCanvas.getContext("2d");
+    this.bodySilhouetteImage = new Image();
+    this.bodySilhouetteLoaded = false;
+    this.bodySilhouetteImage.onload = () => {
+      this.bodySilhouetteLoaded = true;
+    };
+    this.bodySilhouetteImage.onerror = () => {
+      this.bodySilhouetteLoaded = false;
+    };
+    this.bodySilhouetteImage.src = BODY_SILHOUETTE_URL;
 
     this.stream = null;
     this.pose = null;
@@ -761,68 +777,249 @@ export class AuraScanEngine {
 
     ctx.clearRect(0, 0, width, height);
 
-    ctx.fillStyle = "rgba(12,47,64,0.08)";
+    const bg = ctx.createLinearGradient(0, 0, 0, height);
+    bg.addColorStop(0, "rgba(11,36,48,0.12)");
+    bg.addColorStop(1, "rgba(11,36,48,0.03)");
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, width, height);
 
-    const centerX = width / 2;
-
-    ctx.strokeStyle = "rgba(16,54,75,0.45)";
-    ctx.lineWidth = 3;
-
-    ctx.beginPath();
-    ctx.arc(centerX, 42, 24, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(centerX, 66);
-    ctx.lineTo(centerX, 184);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(centerX - 58, 96);
-    ctx.lineTo(centerX + 58, 96);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(centerX, 184);
-    ctx.lineTo(centerX - 38, 260);
-    ctx.moveTo(centerX, 184);
-    ctx.lineTo(centerX + 38, 260);
-    ctx.stroke();
+    const mapPose = buildCanonicalPose(width, height);
+    if (this.bodySilhouetteLoaded && this.bodySilhouetteImage.naturalWidth > 0) {
+      const spriteHeight = height * 0.9;
+      const spriteWidth = spriteHeight * 0.42;
+      const x = (width - spriteWidth) * 0.5;
+      const y = height * 0.05;
+      ctx.save();
+      ctx.globalAlpha = 0.84;
+      ctx.drawImage(this.bodySilhouetteImage, x, y, spriteWidth, spriteHeight);
+      ctx.globalCompositeOperation = "source-atop";
+      ctx.fillStyle = "rgba(194, 198, 203, 0.62)";
+      ctx.fillRect(x, y, spriteWidth, spriteHeight);
+      ctx.restore();
+    } else {
+      drawAnatomyFigure(ctx, mapPose, {
+        alpha: 1,
+        bodyFill: "rgba(186, 190, 194, 0.88)",
+        bodyStroke: "rgba(248, 250, 252, 0.42)",
+        detailStroke: "rgba(250, 251, 252, 0.38)"
+      });
+    }
 
     const zones = this.lastMetrics?.flaggedZones || [];
-
     for (const zone of zones) {
-      this.drawFlagZone(zone);
+      drawZoneHighlight(ctx, mapPose, zone.zone, zone.side, zone.score, {
+        showLabel: true,
+        baseRadius: 12
+      });
     }
   }
 
-  drawFlagZone(zone) {
+  drawBodyZonePatch(zone, mapPose) {
     const ctx = this.bodyMapCtx;
     const width = this.bodyMapCanvas.width;
-    const centerX = width / 2;
+    const height = this.bodyMapCanvas.height;
 
-    const anchors = {
-      shoulder: 96,
-      hip: 160,
-      knee: 226
-    };
+    const anchor = this.resolveBodyZoneAnchor(zone, mapPose);
+    if (!anchor) {
+      return;
+    }
 
-    const y = anchors[zone.zone] || 160;
-    const x = zone.side === "left" ? centerX - 44 : centerX + 44;
+    const severity = clamp(Number(zone.score || 0) / 20, 0, 1);
+    const radiusX = clamp(12 + severity * 12, 11, 24);
+    const radiusY = clamp(radiusX * 1.16, 12, 28);
+    const colorInner = zone.score > 12 ? "rgba(239, 102, 48, 0.68)" : "rgba(245, 165, 66, 0.58)";
+    const colorOuter = zone.score > 12 ? "rgba(239, 102, 48, 0.08)" : "rgba(245, 165, 66, 0.06)";
 
-    const color = zone.score > 12 ? "rgba(205,85,25,0.95)" : "rgba(216,131,32,0.95)";
-    ctx.fillStyle = color;
-
-    const radius = clamp(6 + zone.score * 0.22, 7, 15);
-
+    const gradient = ctx.createRadialGradient(anchor.x, anchor.y, radiusX * 0.16, anchor.x, anchor.y, radiusX);
+    gradient.addColorStop(0, colorInner);
+    gradient.addColorStop(1, colorOuter);
+    ctx.fillStyle = gradient;
     ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.ellipse(anchor.x, anchor.y, radiusX, radiusY, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.font = "11px JetBrains Mono";
-    ctx.fillStyle = "#163648";
-    ctx.fillText(`${zone.zone} ${zone.score}%`, x + 10, y + 4);
+    ctx.save();
+    ctx.font = "600 10px JetBrains Mono";
+    const text = `${zone.side} ${zone.zone} ${zone.score}%`;
+    const textWidth = ctx.measureText(text).width;
+    const bx = clamp(anchor.x - textWidth / 2 - 5, 3, width - textWidth - 13);
+    const by = clamp(anchor.y - radiusY - 18, 3, height - 17);
+    ctx.fillStyle = "rgba(10, 34, 46, 0.8)";
+    ctx.strokeStyle = "rgba(180, 229, 242, 0.5)";
+    roundRect(ctx, bx, by, textWidth + 10, 14, 6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#f4efe2";
+    ctx.fillText(text, bx + 5, by + 10.4);
+    ctx.restore();
+  }
+
+  resolveBodyZoneAnchor(zone, mapPose) {
+    const zoneKey = `${zone.side || "left"}-${zone.zone || "hip"}`;
+    const map = {
+      "left-shoulder": mapPose.leftShoulder,
+      "right-shoulder": mapPose.rightShoulder,
+      "left-hip": mapPose.leftHip,
+      "right-hip": mapPose.rightHip,
+      "left-knee": mapPose.leftKnee,
+      "right-knee": mapPose.rightKnee
+    };
+
+    return map[zoneKey] || mapPose.torsoCenter;
+  }
+
+  buildBodyMapPose(width, height) {
+    const fallback = {
+      shoulderCenter: { x: width * 0.5, y: height * 0.33 },
+      hipCenter: { x: width * 0.5, y: height * 0.58 },
+      torsoCenter: { x: width * 0.5, y: height * 0.46 },
+      leftShoulder: { x: width * 0.39, y: height * 0.34 },
+      rightShoulder: { x: width * 0.61, y: height * 0.34 },
+      leftElbow: { x: width * 0.31, y: height * 0.48 },
+      rightElbow: { x: width * 0.69, y: height * 0.48 },
+      leftWrist: { x: width * 0.3, y: height * 0.62 },
+      rightWrist: { x: width * 0.7, y: height * 0.62 },
+      leftHip: { x: width * 0.44, y: height * 0.58 },
+      rightHip: { x: width * 0.56, y: height * 0.58 },
+      leftKnee: { x: width * 0.44, y: height * 0.75 },
+      rightKnee: { x: width * 0.56, y: height * 0.75 },
+      leftAnkle: { x: width * 0.43, y: height * 0.92 },
+      rightAnkle: { x: width * 0.57, y: height * 0.92 }
+    };
+
+    const pose = this.lastPose;
+    if (!Array.isArray(pose) || pose.length < 29) {
+      return fallback;
+    }
+
+    const point = (idx) => {
+      const value = pose[idx];
+      if (!value || !Number.isFinite(value.x) || !Number.isFinite(value.y)) {
+        return null;
+      }
+      return { x: value.x, y: value.y };
+    };
+
+    const src = {
+      leftShoulder: point(11),
+      rightShoulder: point(12),
+      leftElbow: point(13),
+      rightElbow: point(14),
+      leftWrist: point(15),
+      rightWrist: point(16),
+      leftHip: point(23),
+      rightHip: point(24),
+      leftKnee: point(25),
+      rightKnee: point(26),
+      leftAnkle: point(27),
+      rightAnkle: point(28)
+    };
+
+    if (!src.leftShoulder || !src.rightShoulder || !src.leftHip || !src.rightHip) {
+      return fallback;
+    }
+
+    const points = Object.values(src).filter(Boolean);
+    const minX = Math.min(...points.map((p) => p.x));
+    const maxX = Math.max(...points.map((p) => p.x));
+    const minY = Math.min(...points.map((p) => p.y));
+    const maxY = Math.max(...points.map((p) => p.y));
+    const spanX = Math.max(maxX - minX, 0.1);
+    const spanY = Math.max(maxY - minY, 0.1);
+    const scale = Math.min((width * 0.48) / spanX, (height * 0.7) / spanY);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const targetCx = width * 0.5;
+    const targetCy = height * 0.54;
+
+    const mapped = {};
+    for (const [name, p] of Object.entries(src)) {
+      if (!p) {
+        mapped[name] = fallback[name];
+        continue;
+      }
+      mapped[name] = {
+        x: targetCx + (p.x - cx) * scale,
+        y: targetCy + (p.y - cy) * scale
+      };
+    }
+
+    const shoulderCenter = midpoint(mapped.leftShoulder, mapped.rightShoulder);
+    const hipCenter = midpoint(mapped.leftHip, mapped.rightHip);
+    return {
+      ...mapped,
+      shoulderCenter,
+      hipCenter,
+      torsoCenter: midpoint(shoulderCenter, hipCenter)
+    };
+  }
+
+  drawBodySilhouetteMap(ctx, mapPose, { fillStyle = null, outlineStyle = null, outlineWidth = 2 } = {}) {
+    const shoulderCenter = mapPose.shoulderCenter || midpoint(mapPose.leftShoulder, mapPose.rightShoulder);
+    const hipCenter = mapPose.hipCenter || midpoint(mapPose.leftHip, mapPose.rightHip);
+    const torsoCenter = mapPose.torsoCenter || midpoint(shoulderCenter, hipCenter);
+    const shoulderSpan = distance(mapPose.leftShoulder, mapPose.rightShoulder);
+    const hipSpan = distance(mapPose.leftHip, mapPose.rightHip);
+    const armWidth = clamp(shoulderSpan * 0.38, 10, 24);
+    const legWidth = clamp(Math.max(hipSpan * 0.36, armWidth * 0.8), 9, 22);
+    const headRadius = clamp(shoulderSpan * 0.31, 10, 24);
+    const headCenter = {
+      x: shoulderCenter.x,
+      y: shoulderCenter.y - headRadius * 1.18
+    };
+
+    const leftShoulder = inflateFromCenter(mapPose.leftShoulder, torsoCenter, 1.18, 1.1);
+    const rightShoulder = inflateFromCenter(mapPose.rightShoulder, torsoCenter, 1.18, 1.1);
+    const leftHip = inflateFromCenter(mapPose.leftHip, torsoCenter, 1.14, 1.08);
+    const rightHip = inflateFromCenter(mapPose.rightHip, torsoCenter, 1.14, 1.08);
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (fillStyle) {
+      ctx.fillStyle = fillStyle;
+      ctx.beginPath();
+      ctx.arc(headCenter.x, headCenter.y, headRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(leftShoulder.x, leftShoulder.y);
+      ctx.lineTo(rightShoulder.x, rightShoulder.y);
+      ctx.lineTo(rightHip.x, rightHip.y);
+      ctx.lineTo(leftHip.x, leftHip.y);
+      ctx.closePath();
+      ctx.fill();
+
+      drawLimbStroke(ctx, [mapPose.leftShoulder, mapPose.leftElbow, mapPose.leftWrist], armWidth, fillStyle);
+      drawLimbStroke(ctx, [mapPose.rightShoulder, mapPose.rightElbow, mapPose.rightWrist], armWidth, fillStyle);
+      drawLimbStroke(ctx, [mapPose.leftHip, mapPose.leftKnee, mapPose.leftAnkle], legWidth, fillStyle);
+      drawLimbStroke(ctx, [mapPose.rightHip, mapPose.rightKnee, mapPose.rightAnkle], legWidth, fillStyle);
+    }
+
+    if (outlineStyle) {
+      ctx.strokeStyle = outlineStyle;
+      ctx.lineWidth = outlineWidth;
+
+      ctx.beginPath();
+      ctx.arc(headCenter.x, headCenter.y, headRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(leftShoulder.x, leftShoulder.y);
+      ctx.lineTo(rightShoulder.x, rightShoulder.y);
+      ctx.lineTo(rightHip.x, rightHip.y);
+      ctx.lineTo(leftHip.x, leftHip.y);
+      ctx.closePath();
+      ctx.stroke();
+
+      drawLimbOutline(ctx, [mapPose.leftShoulder, mapPose.leftElbow, mapPose.leftWrist], outlineStyle, outlineWidth);
+      drawLimbOutline(ctx, [mapPose.rightShoulder, mapPose.rightElbow, mapPose.rightWrist], outlineStyle, outlineWidth);
+      drawLimbOutline(ctx, [mapPose.leftHip, mapPose.leftKnee, mapPose.leftAnkle], outlineStyle, outlineWidth);
+      drawLimbOutline(ctx, [mapPose.rightHip, mapPose.rightKnee, mapPose.rightAnkle], outlineStyle, outlineWidth);
+    }
+
+    ctx.restore();
   }
 
   syncCanvasSize() {
@@ -833,7 +1030,7 @@ export class AuraScanEngine {
     this.cameraCanvas.height = height;
 
     this.bodyMapCanvas.width = 320;
-    this.bodyMapCanvas.height = 280;
+    this.bodyMapCanvas.height = 520;
   }
 
   getLatestPoseLandmarks() {
@@ -865,6 +1062,74 @@ function centroid(faceLandmarks, indexes) {
     x: n ? x / n : 0,
     y: n ? y / n : 0
   };
+}
+
+function distance(a, b) {
+  if (!a || !b) {
+    return 0;
+  }
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function midpoint(a, b) {
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2
+  };
+}
+
+function inflateFromCenter(point, center, sx = 1, sy = 1) {
+  return {
+    x: center.x + (point.x - center.x) * sx,
+    y: center.y + (point.y - center.y) * sy
+  };
+}
+
+function drawLimbStroke(ctx, points, lineWidth, color) {
+  const valid = points.filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (valid.length < 2) {
+    return;
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.moveTo(valid[0].x, valid[0].y);
+  for (let i = 1; i < valid.length; i += 1) {
+    ctx.lineTo(valid[i].x, valid[i].y);
+  }
+  ctx.stroke();
+}
+
+function drawLimbOutline(ctx, points, color, lineWidth) {
+  const valid = points.filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y));
+  if (valid.length < 2) {
+    return;
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.moveTo(valid[0].x, valid[0].y);
+  for (let i = 1; i < valid.length; i += 1) {
+    ctx.lineTo(valid[i].x, valid[i].y);
+  }
+  ctx.stroke();
+}
+
+function roundRect(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
 
 function generateSessionId() {

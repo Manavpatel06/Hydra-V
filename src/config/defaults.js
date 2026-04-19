@@ -1,7 +1,7 @@
 ﻿export const DEFAULTS = Object.freeze({
   auraScan: {
     scanDurationSec: 60,
-    autoStartCamera: false,
+    autoStartCamera: true,
     usePythonAnalytics: true,
     analyticsIntervalMs: 1000,
     analyzeProxyUrl: "/api/aura/analyze",
@@ -71,11 +71,11 @@
     analyzeProxyUrl: "/api/thermal/analyze"
   },
   game: {
-    useReyaMotionBridge: true,
-    useReyaMirrorOnLeftShoulder: true
+    useMirrorMotionAdapter: true,
+    useMirrorMotionOnLeftShoulder: true
   },
   voice: {
-    enabled: false,
+    enabled: true,
     proxyUrl: "/api/voice/elevenlabs/tts",
     voiceId: "EXAVITQu4vr4xnSDxMaL",
     modelId: "eleven_turbo_v2_5",

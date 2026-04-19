@@ -38,7 +38,7 @@ function mirrorPoint(point, midlineX) {
   };
 }
 
-export class ReyaMotionAdapter {
+export class MirrorMotionAdapter {
   constructor() {
     this.lastTimestampMs = null;
     this.lastWristY = null;

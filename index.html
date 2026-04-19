@@ -15,11 +15,11 @@
 </head>
 <body>
   <main class="app-shell">
-    <header class="hero">
+    <header class="hero hidden">
       <p class="kicker">HYDRA-V Recovery Runtime</p>
       <h1>Know -> Play -> Grow</h1>
       <p class="subtitle">
-        60-second biometric intake, anatomy-mapped analysis, AR recovery game guidance, and adaptive continuity via Feature 6 + 7.
+        60-second biometric intake, anatomy-mapped analysis, live AR recovery game guidance, and AI-powered session insights.
       </p>
 
       <div class="flow-steps">
@@ -82,7 +82,7 @@
 
         <article class="analysis-box anatomy-note">
           <h4>Flow</h4>
-          <p>1) Run intake scan and confirm highlighted target zone.<br>2) Tap next to enter AR game with voice guidance.<br>3) Finish actions and review summary + garden growth.</p>
+          <p>1) Run intake scan and confirm highlighted target zone.<br>2) Tap next to enter AR game with voice guidance.<br>3) Finish actions and review summary with AI analysis.</p>
         </article>
       </article>
 
@@ -92,8 +92,9 @@
           <p>Aura scan, thermal map, neural ghost, and recovery game overlay run on this live feed.</p>
         </div>
 
-        <div class="camera-stage">
+        <div id="camera-stage" class="camera-stage">
           <video id="aura-video" autoplay muted playsinline class="hidden-video"></video>
+          <canvas id="virtual-game-canvas" class="virtual-game-canvas"></canvas>
           <canvas id="aura-camera-canvas" class="camera-canvas"></canvas>
           <canvas id="thermal-overlay-canvas" class="thermal-canvas"></canvas>
           <canvas id="neural-ghost-canvas" class="ghost-canvas"></canvas>
@@ -130,14 +131,14 @@
               <p id="intake-progress-label">Ready for 60-second scan.</p>
             </div>
 
-            <div class="controls-grid">
+            <div class="controls-grid hidden">
               <label class="field">
                 <span>Scan Duration (sec)</span>
                 <input id="intake-scan-duration" type="number" min="20" max="180" step="1" value="60">
               </label>
             </div>
 
-            <div class="button-row">
+            <div class="button-row hidden">
               <button id="start-camera" type="button">Start Camera</button>
               <button id="stop-camera" type="button" class="ghost">Stop Camera</button>
               <button id="start-intake-scan" type="button">Start Intake Scan</button>
@@ -168,7 +169,7 @@
               <div><span>Score</span><strong id="game-score">0%</strong></div>
               <div><span>Reps</span><strong id="game-reps">0 / 0</strong></div>
               <div><span>Actions</span><strong id="game-actions-count">0 / 0</strong></div>
-              <div><span>Reya Sync</span><strong id="game-reya-sync">-- %</strong></div>
+              <div><span>Motion Sync</span><strong id="game-motion-sync">-- %</strong></div>
             </div>
 
             <div class="progress-track"><div id="game-progress-fill"></div></div>
@@ -203,8 +204,8 @@
 
     <section id="summary-section" class="panel hidden">
       <div class="panel-head">
-        <h2>Improvement + Feature 6/7 Continuity</h2>
-        <p>Outcome deltas, adaptive protocol recommendation, and Solace Digital Garden growth.</p>
+        <h2>Improvement + AI Analysis</h2>
+        <p>Outcome deltas, adaptive protocol recommendation, and movement-driven recovery insights.</p>
       </div>
 
       <div class="metric-grid">
@@ -214,18 +215,21 @@
         <div class="metric"><span>Readiness Gain</span><strong id="summary-readiness-gain">--</strong></div>
         <div class="metric"><span>ROM Gain (Game)</span><strong id="summary-rom-gain">--</strong></div>
         <div class="metric"><span>Game Score</span><strong id="summary-game-score">--</strong></div>
-        <div class="metric"><span>Reya Motion Sync</span><strong id="summary-reya-sync">--</strong></div>
+        <div class="metric"><span>Motion Sync</span><strong id="summary-motion-sync">--</strong></div>
       </div>
 
       <div class="summary-grid">
         <article class="summary-card">
-          <h3>Feature 7: Adaptive Protocol AI</h3>
+          <h3>REA AI Recovery Analysis</h3>
           <div class="metric-grid compact">
             <div class="metric"><span>Model</span><strong id="rec-model-mode">--</strong></div>
             <div class="metric"><span>Expected Improvement</span><strong id="rec-improvement">--</strong></div>
             <div class="metric"><span>Confidence</span><strong id="rec-confidence">--</strong></div>
             <div class="metric"><span>Uncertainty</span><strong id="rec-uncertainty">--</strong></div>
           </div>
+
+          <h4>Session Interpretation</h4>
+          <p id="summary-analysis-text" class="summary-analysis-text">AI analysis will appear after post-session scan.</p>
 
           <h4>Rationale</h4>
           <ul id="rec-rationale" class="text-list"></ul>
@@ -238,15 +242,18 @@
         </article>
 
         <article class="summary-card">
-          <h3>Feature 6: Solace Digital Garden+</h3>
-          <canvas id="garden-canvas" class="garden-canvas" width="900" height="420"></canvas>
-          <div id="garden-milestones" class="milestones"></div>
-          <div id="garden-species" class="species-list"></div>
+          <h3>Live Gameplay Impact</h3>
+          <ul id="summary-live-impact" class="text-list"></ul>
+          <div class="hidden">
+            <canvas id="garden-canvas" class="garden-canvas" width="900" height="420"></canvas>
+            <div id="garden-milestones" class="milestones"></div>
+            <div id="garden-species" class="species-list"></div>
+          </div>
         </article>
       </div>
     </section>
 
-    <details class="panel tech-drawer">
+    <details class="panel tech-drawer hidden">
       <summary>Device + Voice Controls</summary>
 
       <div class="controls-grid">
