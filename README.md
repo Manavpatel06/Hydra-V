@@ -13,7 +13,7 @@ This system bridges:
 
 ---
 
-## 🚀 Quick Start
+##  Structure
 
 ### 1. Frontend + Realtime Engine
 
@@ -49,7 +49,7 @@ http://127.0.0.1:8010
 
 ---
 
-## 🧠 Hydrawav3 Integration
+##  Hydrawav3 Integration
 
 HYDRA-V directly controls and enhances:
 
