@@ -555,13 +555,15 @@ export class RecoveryGameEngine {
     if (!action) {
       return;
     }
+    const nextAction = this.actions[this.currentActionIndex + 1] || null;
     this.previewAction = action;
 
     this.onActionChanged?.({
       index: this.currentActionIndex,
       total: this.actions.length,
       ...action,
-      repsDone: this.currentRepCount
+      repsDone: this.currentRepCount,
+      nextLabel: nextAction?.label || null
     });
   }
 
@@ -837,52 +839,13 @@ export class RecoveryGameEngine {
 
     ctx.clearRect(0, 0, width, height);
 
-    ctx.fillStyle = "rgba(6, 16, 24, 0.34)";
-    ctx.fillRect(0, 0, width, height);
-
     const action = this.actions[this.currentActionIndex];
     const phase = (Math.sin((performance.now() - this.startedAt) / 450) + 1) * 0.5;
-
-    if (this.latestLandmarks && action && !finished) {
-      const targetLandmarks = this.buildTargetLandmarks(this.latestLandmarks, action, phase);
-      const targetPose = targetLandmarks
-        ? buildPoseFromLandmarks(targetLandmarks, width, height)
-        : null;
-      const livePose = buildPoseFromLandmarks(this.latestLandmarks, width, height);
-
-      if (targetPose) {
-        this.drawPoseFigure(ctx, targetPose, {
-          alpha: 0.5,
-          tint: "rgba(79, 218, 255, 0.82)",
-          fallbackFill: "rgba(85, 214, 255, 0.55)",
-          fallbackStroke: "rgba(166, 241, 255, 0.78)",
-          fallbackDetail: "rgba(219, 250, 255, 0.58)",
-          glow: "rgba(80, 214, 255, 0.72)"
-        });
-        drawZoneHighlight(ctx, targetPose, this.zone, this.side, 14, {
-          showLabel: false,
-          baseRadius: 14
-        });
-      }
-
-      if (livePose) {
-        this.drawPoseFigure(ctx, livePose, {
-          alpha: 0.83,
-          tint: "rgba(248, 183, 102, 0.86)",
-          fallbackFill: "rgba(248, 183, 102, 0.72)",
-          fallbackStroke: "rgba(255, 226, 182, 0.78)",
-          fallbackDetail: "rgba(255, 239, 212, 0.54)",
-          glow: "rgba(245, 169, 65, 0.56)"
-        });
-        drawZoneHighlight(ctx, livePose, this.zone, this.side, 11, {
-          showLabel: false,
-          baseRadius: 12
-        });
-      }
-    }
-
-    ctx.fillStyle = "rgba(7, 22, 33, 0.72)";
-    ctx.fillRect(0, 0, width, 106);
+    const topGradient = ctx.createLinearGradient(0, 0, 0, 120);
+    topGradient.addColorStop(0, "rgba(4, 14, 28, 0.82)");
+    topGradient.addColorStop(1, "rgba(4, 14, 28, 0)");
+    ctx.fillStyle = topGradient;
+    ctx.fillRect(0, 0, width, 130);
 
     ctx.fillStyle = "#e9f8ff";
     ctx.font = "600 21px Sora";
@@ -910,14 +873,18 @@ export class RecoveryGameEngine {
     ctx.fillStyle = "rgba(165, 226, 252, 0.95)";
     ctx.fillText(`${matchText} | ${vitalsText} | ${motionText}`, 16, 76);
     ctx.fillStyle = "rgba(210, 239, 252, 0.85)";
-    ctx.fillText("Follow the preview in bottom-left to match each rep clearly.", 16, 96);
+    ctx.fillText("Follow the movement preview at bottom-left to perform each rep.", 16, 96);
 
     this.drawActionPreview(ctx, this.previewAction || action, phase, width, height);
 
-    ctx.fillStyle = "rgba(255,255,255,0.16)";
-    ctx.fillRect(16, height - 34, width - 32, 12);
+    const progressWidth = Math.max(width - 32, 120);
+    ctx.fillStyle = "rgba(6, 25, 40, 0.74)";
+    roundRect(ctx, 16, height - 34, progressWidth, 12, 6);
+    ctx.fill();
+    const fillW = progressWidth * (this.progressScore / 100);
     ctx.fillStyle = "rgba(62,226,176,0.9)";
-    ctx.fillRect(16, height - 34, (width - 32) * (this.progressScore / 100), 12);
+    roundRect(ctx, 16, height - 34, fillW, 12, 6);
+    ctx.fill();
 
     for (let i = 0; i < 5; i += 1) {
       const x = width - 26 - i * 22;
@@ -932,7 +899,7 @@ export class RecoveryGameEngine {
     if (!sample) {
       ctx.fillStyle = "rgba(255,255,255,0.84)";
       ctx.font = "500 14px Sora";
-      ctx.fillText("Hold full body in frame for anatomy-tracked exercise.", 16, 122);
+      ctx.fillText("Keep full body visible in camera PIP for tracking.", 16, 122);
     }
   }
 

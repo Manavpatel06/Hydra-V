@@ -1,5 +1,70 @@
-import * as THREE from "three";
+import * as THREE from "../../../node_modules/three/build/three.module.js";
 import { clamp } from "../../core/utils.js";
+
+const SECTION_TARGETS = {
+  foundation: 9,
+  walls: 16,
+  roof: 9,
+  peak: 1
+};
+
+const SECTION_ORDER = ["foundation", "walls", "roof", "peak"];
+const TOTAL_BLOCKS = SECTION_ORDER.reduce((sum, key) => sum + SECTION_TARGETS[key], 0);
+
+function easeOutCubic(t) {
+  const x = clamp(t, 0, 1);
+  return 1 - ((1 - x) ** 3);
+}
+
+function ringCoords(radius) {
+  const coords = [];
+  for (let x = -radius; x <= radius; x += 1) {
+    for (let z = -radius; z <= radius; z += 1) {
+      if (Math.abs(x) === radius || Math.abs(z) === radius) {
+        coords.push([x, z]);
+      }
+    }
+  }
+  return coords;
+}
+
+function actionPalette(actionId = "", section = "foundation") {
+  const id = String(actionId || "").toLowerCase();
+
+  if (id.includes("squat") || id.includes("hinge")) {
+    return {
+      foundation: "#c79b5a",
+      walls: "#bf8444",
+      roof: "#6ea4de",
+      peak: "#ffd978"
+    }[section];
+  }
+
+  if (id.includes("raise") || id.includes("reach") || id.includes("drive")) {
+    return {
+      foundation: "#a78f5f",
+      walls: "#c08f6a",
+      roof: "#6bb3cc",
+      peak: "#f3e489"
+    }[section];
+  }
+
+  if (id.includes("march") || id.includes("step") || id.includes("extension")) {
+    return {
+      foundation: "#af8a58",
+      walls: "#d37b5a",
+      roof: "#63a7d4",
+      peak: "#ffd884"
+    }[section];
+  }
+
+  return {
+    foundation: "#b58d58",
+    walls: "#ce7f56",
+    roof: "#679dcf",
+    peak: "#f4d974"
+  }[section];
+}
 
 export class VirtualRecoveryWorld {
   constructor({ canvasEl }) {
@@ -8,14 +73,29 @@ export class VirtualRecoveryWorld {
     this.renderer = null;
     this.scene = null;
     this.camera = null;
+    this.cameraFrustum = 7.5;
+
     this.ambientLight = null;
     this.keyLight = null;
+    this.fillLight = null;
 
-    this.avatar = null;
-    this.avatarMat = null;
-    this.energyOrbs = [];
-    this.trackMarkers = [];
-    this.stars = null;
+    this.platformGroup = null;
+    this.buildGroup = null;
+    this.blockQueue = [];
+    this.sectionBlocks = {
+      foundation: [],
+      walls: [],
+      roof: [],
+      peak: []
+    };
+    this.sectionPlaced = {
+      foundation: 0,
+      walls: 0,
+      roof: 0,
+      peak: 0
+    };
+
+    this.sparkles = null;
 
     this.running = false;
     this.rafId = null;
@@ -25,15 +105,15 @@ export class VirtualRecoveryWorld {
     this.matchScore = 0;
     this.vitalsScore = 0;
     this.motionSync = 0;
-    this.actionsCompleted = 0;
-    this.actionsTotal = 0;
-    this.repsDone = 0;
-    this.repsTarget = 0;
-    this.lastRepCount = 0;
-    this.actionId = null;
 
-    this.targetAvatarZ = -4;
-    this.jumpBoost = 0;
+    this.totalBlocks = TOTAL_BLOCKS;
+    this.placedCount = 0;
+    this.repDrivenPlacements = 0;
+    this.lastRepCount = 0;
+    this.lastActionsCompleted = 0;
+    this.lastSeenActionId = null;
+    this.zoneTint = "#4ce6d1";
+
     this.initialized = false;
   }
 
@@ -61,10 +141,16 @@ export class VirtualRecoveryWorld {
     if (!this.renderer || !this.camera || !this.canvas) {
       return;
     }
+
     const width = this.canvas.clientWidth || this.canvas.width || 960;
     const height = this.canvas.clientHeight || this.canvas.height || 540;
+
     this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / Math.max(height, 1);
+    const aspect = width / Math.max(height, 1);
+    this.camera.left = -this.cameraFrustum * aspect;
+    this.camera.right = this.cameraFrustum * aspect;
+    this.camera.top = this.cameraFrustum;
+    this.camera.bottom = -this.cameraFrustum;
     this.camera.updateProjectionMatrix();
   }
 
@@ -73,21 +159,37 @@ export class VirtualRecoveryWorld {
     this.matchScore = clamp(Number(payload.movementMatchScore || this.matchScore || 0), 0, 100);
     this.vitalsScore = clamp(Number(payload.vitalsScore || this.vitalsScore || 0), 0, 100);
     this.motionSync = clamp(Number(payload.motionSyncScore || this.motionSync || 0), 0, 100);
-    this.actionsCompleted = Number(payload.actionsCompleted || this.actionsCompleted || 0);
-    this.actionsTotal = Number(payload.actionsTotal || this.actionsTotal || 0);
-    this.repsDone = Number(payload.repsDone || 0);
-    this.repsTarget = Number(payload.repsTarget || 0);
-    this.actionId = payload.actionId || this.actionId;
 
-    if (this.repsDone > this.lastRepCount) {
-      this.jumpBoost = 0.35;
-      this.lastRepCount = this.repsDone;
+    const repsDone = Number(payload.repsDone || 0);
+    const actionsCompleted = Number(payload.actionsCompleted || 0);
+
+    if (actionsCompleted > this.lastActionsCompleted) {
+      this.repDrivenPlacements += actionsCompleted - this.lastActionsCompleted;
+      this.lastActionsCompleted = actionsCompleted;
     }
 
-    const normalized = this.progress / 100;
-    this.targetAvatarZ = -5 - normalized * 38;
-    this.updateOrbCollection(normalized);
+    if (repsDone > this.lastRepCount) {
+      this.repDrivenPlacements += repsDone - this.lastRepCount;
+      this.lastRepCount = repsDone;
+    }
+
+    if (typeof payload.actionId === "string" && payload.actionId) {
+      this.lastSeenActionId = payload.actionId;
+    }
+
+    const scoreDrivenTarget = Math.round((this.progress / 100) * this.totalBlocks);
+    const target = clamp(Math.max(scoreDrivenTarget, this.repDrivenPlacements), 0, this.totalBlocks);
+    this.setPlacedCount(target, this.lastSeenActionId);
     this.updateLighting();
+  }
+
+  getBuildStats() {
+    return {
+      totalPlaced: this.placedCount,
+      totalTarget: this.totalBlocks,
+      ...this.sectionPlaced,
+      targets: { ...SECTION_TARGETS }
+    };
   }
 
   initialize() {
@@ -99,191 +201,268 @@ export class VirtualRecoveryWorld {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color("#061620");
-    this.scene.fog = new THREE.Fog("#061620", 18, 74);
+    this.scene.background = new THREE.Color("#041327");
+    this.scene.fog = new THREE.Fog("#041327", 11, 40);
 
-    this.camera = new THREE.PerspectiveCamera(53, 16 / 9, 0.1, 180);
-    this.camera.position.set(0, 6, 11);
-    this.camera.lookAt(0, 1, -12);
+    this.camera = new THREE.OrthographicCamera(-10, 10, 8, -8, 0.1, 80);
+    this.camera.position.set(9.6, 8.4, 9.4);
+    this.camera.lookAt(0, 0.9, 0);
 
-    this.ambientLight = new THREE.AmbientLight("#6bb3ff", 0.7);
-    this.keyLight = new THREE.DirectionalLight("#ffffff", 1.15);
-    this.keyLight.position.set(5, 9, 2);
-    const rimLight = new THREE.DirectionalLight("#8fffd0", 0.45);
-    rimLight.position.set(-7, 6, -8);
-    this.scene.add(this.ambientLight, this.keyLight, rimLight);
+    this.ambientLight = new THREE.AmbientLight("#8dd8ff", 0.74);
+    this.keyLight = new THREE.DirectionalLight("#ffffff", 1.1);
+    this.keyLight.position.set(7, 11, 4);
+    this.fillLight = new THREE.DirectionalLight("#4bc7ff", 0.44);
+    this.fillLight.position.set(-6, 7, -7);
+    this.scene.add(this.ambientLight, this.keyLight, this.fillLight);
 
-    this.buildTrack();
-    this.buildAvatar();
-    this.buildOrbs();
-    this.buildStars();
+    this.platformGroup = new THREE.Group();
+    this.buildGroup = new THREE.Group();
+    this.scene.add(this.platformGroup, this.buildGroup);
+
+    this.buildIsometricPlatform();
+    this.buildStructureBlocks();
+    this.buildSparkles();
 
     this.initialized = true;
     this.resize();
   }
 
-  buildTrack() {
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(24, 100, 1, 1),
-      new THREE.MeshStandardMaterial({
-        color: "#0d2532",
-        roughness: 0.88,
-        metalness: 0.06
+  buildIsometricPlatform() {
+    const tileGeom = new THREE.BoxGeometry(0.94, 0.24, 0.94);
+
+    for (let gx = -3; gx <= 3; gx += 1) {
+      for (let gz = -3; gz <= 3; gz += 1) {
+        const distance = Math.sqrt(gx * gx + gz * gz);
+        const edgeFade = clamp(1 - distance / 5.2, 0, 1);
+        const color = new THREE.Color().setHSL(0.29, 0.33, 0.2 + edgeFade * 0.14);
+        const emissive = new THREE.Color().setHSL(0.33, 0.44, 0.06 + edgeFade * 0.04);
+
+        const tile = new THREE.Mesh(
+          tileGeom,
+          new THREE.MeshStandardMaterial({
+            color,
+            emissive,
+            emissiveIntensity: 0.85,
+            roughness: 0.72,
+            metalness: 0.08
+          })
+        );
+
+        tile.position.set(gx, 0, gz);
+        this.platformGroup.add(tile);
+      }
+    }
+
+    const water = new THREE.Mesh(
+      new THREE.CircleGeometry(2.3, 40),
+      new THREE.MeshBasicMaterial({
+        color: "#0f4568",
+        transparent: true,
+        opacity: 0.32
       })
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = 0;
-    ground.position.z = -30;
-    this.scene.add(ground);
-
-    const laneMat = new THREE.MeshStandardMaterial({
-      color: "#1e5164",
-      emissive: "#123847",
-      emissiveIntensity: 0.45
-    });
-    for (let i = 0; i < 28; i += 1) {
-      const marker = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.02, 1.5), laneMat.clone());
-      marker.position.set(0, 0.02, -4 - i * 3.1);
-      this.trackMarkers.push(marker);
-      this.scene.add(marker);
-    }
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(0, 0.13, 0);
+    this.platformGroup.add(water);
   }
 
-  buildAvatar() {
-    const group = new THREE.Group();
-    this.avatarMat = new THREE.MeshStandardMaterial({
-      color: "#ffbc70",
-      emissive: "#7e4f24",
-      emissiveIntensity: 0.32,
-      roughness: 0.35,
-      metalness: 0.08
-    });
+  buildStructureBlocks() {
+    this.blockQueue = [];
+    this.sectionBlocks = {
+      foundation: [],
+      walls: [],
+      roof: [],
+      peak: []
+    };
 
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.46, 1.2, 10, 16), this.avatarMat);
-    body.position.y = 1.4;
-    group.add(body);
+    const blockGeom = new THREE.BoxGeometry(0.84, 0.38, 0.84);
 
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 18, 18), this.avatarMat);
-    head.position.y = 2.42;
-    group.add(head);
+    const addBlock = (section, x, y, z, sortBias = 0) => {
+      const baseColor = actionPalette("", section);
+      const mesh = new THREE.Mesh(
+        blockGeom,
+        new THREE.MeshStandardMaterial({
+          color: baseColor,
+          emissive: "#2b1e12",
+          emissiveIntensity: 0.16,
+          roughness: 0.4,
+          metalness: 0.12
+        })
+      );
 
-    const leftArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.7, 8, 10), this.avatarMat);
-    leftArm.position.set(-0.5, 1.7, 0);
-    leftArm.rotation.z = 0.22;
-    group.add(leftArm);
-
-    const rightArm = leftArm.clone();
-    rightArm.position.x = 0.5;
-    rightArm.rotation.z = -0.22;
-    group.add(rightArm);
-
-    const leftLeg = new THREE.Mesh(new THREE.CapsuleGeometry(0.14, 0.9, 8, 10), this.avatarMat);
-    leftLeg.position.set(-0.22, 0.56, 0);
-    group.add(leftLeg);
-
-    const rightLeg = leftLeg.clone();
-    rightLeg.position.x = 0.22;
-    group.add(rightLeg);
-
-    group.position.set(0, 0.02, -4);
-    this.avatar = group;
-    this.scene.add(group);
-  }
-
-  buildOrbs() {
-    const geometry = new THREE.SphereGeometry(0.22, 14, 14);
-    for (let i = 0; i < 24; i += 1) {
-      const t = i / 23;
-      const mat = new THREE.MeshStandardMaterial({
-        color: i % 2 === 0 ? "#4de8c2" : "#6ad2ff",
-        emissive: i % 2 === 0 ? "#1f8f74" : "#2f8db8",
-        emissiveIntensity: 0.75,
-        roughness: 0.22,
-        metalness: 0.15,
-        transparent: true,
-        opacity: 0.96
-      });
-      const mesh = new THREE.Mesh(geometry, mat);
-      mesh.position.set((i % 2 === 0 ? -1 : 1) * (0.8 + (i % 3) * 0.2), 1.2 + (i % 4) * 0.16, -6 - t * 36);
+      mesh.visible = false;
+      mesh.position.set(x, y, z);
       mesh.userData = {
-        idx: i,
-        baseY: mesh.position.y,
-        collected: false
+        section,
+        targetY: y,
+        rise: 0,
+        bornAt: 0,
+        sortBias
       };
-      this.energyOrbs.push(mesh);
-      this.scene.add(mesh);
+
+      this.buildGroup.add(mesh);
+      this.sectionBlocks[section].push(mesh);
+      this.blockQueue.push(mesh);
+    };
+
+    for (let x = -1; x <= 1; x += 1) {
+      for (let z = -1; z <= 1; z += 1) {
+        addBlock("foundation", x, 0.33, z, 0);
+      }
     }
+
+    const wallCoords = ringCoords(2);
+    wallCoords.forEach(([x, z], idx) => {
+      addBlock("walls", x * 0.95, 0.73, z * 0.95, idx * 0.001);
+    });
+
+    for (let x = -1; x <= 1; x += 1) {
+      for (let z = -1; z <= 1; z += 1) {
+        addBlock("roof", x * 0.95, 1.13, z * 0.95, 0);
+      }
+    }
+
+    addBlock("peak", 0, 1.53, 0, 0);
+
+    this.blockQueue.sort((a, b) => {
+      const sectionDelta = SECTION_ORDER.indexOf(a.userData.section) - SECTION_ORDER.indexOf(b.userData.section);
+      if (sectionDelta !== 0) {
+        return sectionDelta;
+      }
+      return (a.userData.targetY + a.userData.sortBias) - (b.userData.targetY + b.userData.sortBias);
+    });
   }
 
-  buildStars() {
-    const geo = new THREE.BufferGeometry();
-    const points = [];
-    for (let i = 0; i < 320; i += 1) {
-      points.push((Math.random() - 0.5) * 60, Math.random() * 18 + 1, -Math.random() * 90);
+  buildSparkles() {
+    const positions = [];
+    for (let i = 0; i < 240; i += 1) {
+      positions.push((Math.random() - 0.5) * 34, Math.random() * 11 + 0.4, (Math.random() - 0.5) * 34);
     }
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+
     const mat = new THREE.PointsMaterial({
-      color: "#cceeff",
+      color: "#9edfff",
       size: 0.08,
       transparent: true,
-      opacity: 0.78
+      opacity: 0.56
     });
-    this.stars = new THREE.Points(geo, mat);
-    this.scene.add(this.stars);
+
+    this.sparkles = new THREE.Points(geo, mat);
+    this.scene.add(this.sparkles);
   }
 
-  resetWorld(context) {
+  resetWorld(context = {}) {
     this.progress = 0;
     this.matchScore = 0;
     this.vitalsScore = 0;
     this.motionSync = 0;
-    this.actionsCompleted = 0;
-    this.actionsTotal = 0;
-    this.repsDone = 0;
-    this.repsTarget = 0;
+    this.placedCount = 0;
+    this.repDrivenPlacements = 0;
     this.lastRepCount = 0;
-    this.actionId = null;
-    this.targetAvatarZ = -5;
-    this.jumpBoost = 0;
+    this.lastActionsCompleted = 0;
+    this.lastSeenActionId = null;
 
-    if (this.avatar) {
-      this.avatar.position.set(0, 0.02, -5);
-    }
+    this.sectionPlaced = {
+      foundation: 0,
+      walls: 0,
+      roof: 0,
+      peak: 0
+    };
 
-    this.energyOrbs.forEach((orb) => {
-      orb.userData.collected = false;
-      orb.visible = true;
-      orb.material.opacity = 0.96;
+    this.blockQueue.forEach((mesh) => {
+      mesh.visible = false;
+      mesh.position.y = mesh.userData.targetY;
+      mesh.scale.set(1, 1, 1);
+      mesh.userData.rise = 0;
+      mesh.userData.bornAt = 0;
     });
 
-    const zoneHue = context.zone === "hip" ? "#7df7cc" : context.zone === "knee" ? "#79dbff" : "#ffc57a";
-    if (this.avatarMat) {
-      this.avatarMat.color.set(zoneHue);
-      this.avatarMat.emissive.set("#5e3b1a");
+    if (context.zone === "knee") {
+      this.zoneTint = "#73d8ff";
+    } else if (context.zone === "hip") {
+      this.zoneTint = "#65f2b8";
+    } else {
+      this.zoneTint = "#ffd08a";
     }
+
     this.updateLighting();
   }
 
-  updateOrbCollection(normalizedProgress) {
-    const collected = Math.floor(normalizedProgress * this.energyOrbs.length);
-    this.energyOrbs.forEach((orb, index) => {
-      if (index < collected) {
-        orb.userData.collected = true;
-      }
-    });
+  setPlacedCount(targetCount, actionId = null) {
+    const target = clamp(Math.round(targetCount), 0, this.totalBlocks);
+
+    while (this.placedCount < target) {
+      this.placeNextBlock(actionId);
+    }
+
+    while (this.placedCount > target) {
+      this.removeLastBlock();
+    }
+  }
+
+  placeNextBlock(actionId = null) {
+    const mesh = this.blockQueue[this.placedCount];
+    if (!mesh) {
+      return;
+    }
+
+    const { section, targetY } = mesh.userData;
+    const color = actionPalette(actionId, section);
+
+    mesh.material.color.set(color);
+    mesh.material.emissive.set(section === "roof" || section === "peak" ? "#235e8a" : "#6a3a1e");
+    mesh.material.emissiveIntensity = section === "peak" ? 0.58 : 0.26;
+
+    mesh.visible = true;
+    mesh.position.y = targetY - 1.15;
+    mesh.scale.set(1, 0.08, 1);
+    mesh.userData.rise = 1;
+    mesh.userData.bornAt = performance.now();
+
+    this.placedCount += 1;
+    this.sectionPlaced[section] += 1;
+  }
+
+  removeLastBlock() {
+    if (this.placedCount <= 0) {
+      return;
+    }
+
+    const index = this.placedCount - 1;
+    const mesh = this.blockQueue[index];
+    if (!mesh) {
+      return;
+    }
+
+    mesh.visible = false;
+    mesh.userData.rise = 0;
+    mesh.position.y = mesh.userData.targetY;
+    mesh.scale.set(1, 1, 1);
+
+    this.placedCount = index;
+    this.sectionPlaced[mesh.userData.section] = Math.max(this.sectionPlaced[mesh.userData.section] - 1, 0);
   }
 
   updateLighting() {
     const vital = this.vitalsScore / 100;
     const match = this.matchScore / 100;
     const sync = this.motionSync / 100;
-    const blend = clamp(vital * 0.45 + match * 0.35 + sync * 0.2, 0, 1);
+    const blend = clamp(vital * 0.4 + match * 0.36 + sync * 0.24, 0, 1);
+
     if (this.ambientLight) {
-      this.ambientLight.intensity = 0.52 + blend * 0.55;
-      this.ambientLight.color.setHSL(0.53 - blend * 0.1, 0.45, 0.56);
+      this.ambientLight.intensity = 0.55 + blend * 0.55;
+      this.ambientLight.color.setHSL(0.54 - blend * 0.08, 0.5, 0.54);
     }
+
     if (this.keyLight) {
-      this.keyLight.intensity = 0.9 + blend * 0.5;
+      this.keyLight.intensity = 0.95 + blend * 0.45;
+    }
+
+    if (this.fillLight) {
+      this.fillLight.intensity = 0.26 + blend * 0.44;
+      this.fillLight.color.set(this.zoneTint);
     }
   }
 
@@ -291,40 +470,43 @@ export class VirtualRecoveryWorld {
     if (!this.running) {
       return;
     }
+
     const now = performance.now();
     const dt = Math.min((now - this.lastTime) / 1000, 0.06);
     this.lastTime = now;
-
     const t = now * 0.001;
 
-    if (this.avatar) {
-      this.avatar.position.z += (this.targetAvatarZ - this.avatar.position.z) * 0.1;
-      this.jumpBoost = Math.max(this.jumpBoost - dt * 1.1, 0);
-      this.avatar.position.y = 0.06 + Math.sin(t * 6.5) * 0.06 + this.jumpBoost;
-      this.avatar.rotation.y = Math.sin(t * 2.2) * 0.08;
-    }
-
-    this.energyOrbs.forEach((orb, idx) => {
-      orb.position.y = orb.userData.baseY + Math.sin(t * 2.4 + idx * 0.5) * 0.1;
-      if (orb.userData.collected) {
-        orb.material.opacity = Math.max(orb.material.opacity - dt * 3.8, 0);
-        orb.scale.multiplyScalar(0.985);
-        if (orb.material.opacity <= 0.02) {
-          orb.visible = false;
-        }
-      } else {
-        orb.scale.setScalar(1 + Math.sin(t * 3 + idx) * 0.06);
+    for (const mesh of this.blockQueue) {
+      if (!mesh.visible) {
+        continue;
       }
-    });
 
-    this.trackMarkers.forEach((marker, idx) => {
-      const pulse = 0.35 + Math.sin(t * 4 + idx * 0.4) * 0.2;
-      marker.material.emissiveIntensity = pulse * (0.5 + (this.progress / 100) * 0.8);
-    });
+      if (mesh.userData.rise > 0) {
+        mesh.userData.rise = Math.max(mesh.userData.rise - dt * 2.2, 0);
+        const eased = easeOutCubic(1 - mesh.userData.rise);
+        mesh.position.y = THREE.MathUtils.lerp(mesh.userData.targetY - 1.15, mesh.userData.targetY, eased);
+        mesh.scale.y = THREE.MathUtils.lerp(0.08, 1, eased);
+      }
 
-    if (this.stars) {
-      this.stars.rotation.y += dt * 0.03;
+      const lifeSec = (now - mesh.userData.bornAt) / 1000;
+      const pulse = 0.08 + Math.max(0, 1.2 - lifeSec) * 0.28;
+      mesh.material.emissiveIntensity = clamp((mesh.material.emissiveIntensity * 0.95) + pulse * 0.05, 0.1, 0.64);
     }
+
+    if (this.platformGroup) {
+      this.platformGroup.rotation.y = Math.sin(t * 0.2) * 0.03;
+    }
+
+    if (this.sparkles) {
+      this.sparkles.rotation.y += dt * 0.03;
+      this.sparkles.position.y = Math.sin(t * 0.35) * 0.1;
+      this.sparkles.material.opacity = 0.45 + Math.sin(t * 0.8) * 0.08;
+    }
+
+    const drift = Math.sin(t * 0.22) * 0.18;
+    this.camera.position.x = 9.6 + drift;
+    this.camera.position.z = 9.4 + Math.cos(t * 0.22) * 0.12;
+    this.camera.lookAt(0, 0.92, 0);
 
     this.renderer.render(this.scene, this.camera);
     this.rafId = requestAnimationFrame(this.animate);

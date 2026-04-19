@@ -14,12 +14,12 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 </head>
 <body>
-  <main class="app-shell">
-    <header class="hero hidden">
-      <p class="kicker">HYDRA-V Recovery Runtime</p>
-      <h1>Know -> Play -> Grow</h1>
+  <main id="app-shell" class="app-shell">
+    <header class="hero">
+      <p class="kicker">HYDRA-V AR FITNESS SYSTEM v2.1</p>
+      <h1>Scan -> Recover -> Build</h1>
       <p class="subtitle">
-        60-second biometric intake, anatomy-mapped analysis, live AR recovery game guidance, and AI-powered session insights.
+        60-second biometric intake, anatomy body-map targeting, and a movement-driven 3D recovery world.
       </p>
 
       <div class="flow-steps">
@@ -50,10 +50,6 @@
           <span id="device-api-status" class="pill pill-idle">Logged Out</span>
         </div>
         <div>
-          <span class="label">BLE Link</span>
-          <span id="ble-status" class="pill pill-idle">Disconnected</span>
-        </div>
-        <div>
           <span class="label">Neuro Phase</span>
           <span id="neuro-phase-status" class="pill pill-idle">Idle</span>
         </div>
@@ -65,31 +61,62 @@
     </header>
 
     <section class="experience-layout">
-      <article class="panel anatomy-panel">
+      <article id="anatomy-panel" class="panel anatomy-panel">
         <div class="panel-head">
-          <h2>Anatomy + Live Metrics</h2>
-          <p>Cold-zone body map and session context.</p>
+          <h2 id="anatomy-panel-title">Body Map</h2>
+          <p id="anatomy-panel-subtitle">Cold-zone targeting with live scan metrics.</p>
         </div>
 
-        <div class="body-map-wrap">
-          <canvas id="aura-bodymap-canvas" class="bodymap-canvas"></canvas>
+        <div id="anatomy-scan-view" class="anatomy-view">
+          <div class="body-map-wrap">
+            <canvas id="aura-bodymap-canvas" class="bodymap-canvas"></canvas>
+          </div>
+
+          <div class="scan-metrics-stack">
+            <div class="scan-metric-row"><span>Posture</span><strong id="left-metric-posture">-- %</strong></div>
+            <div class="scan-metric-row"><span>Heart Rate</span><strong id="left-metric-heart">-- bpm</strong></div>
+            <div class="scan-metric-row"><span>Balance</span><strong id="left-metric-balance">-- %</strong></div>
+            <div class="scan-metric-row"><span>Joint Health</span><strong id="left-metric-joint">--</strong></div>
+          </div>
+
+          <article class="analysis-box anatomy-note">
+            <h4>Flow</h4>
+            <p>1) Scan auto-starts on load.<br>2) Review body-map target.<br>3) Start AR recovery game and follow guided actions.</p>
+          </article>
         </div>
 
-        <article class="analysis-box anatomy-note">
-          <h4>Placement Guide</h4>
-          <p>Use this panel to identify the cold-zone map while the camera overlay shows real-time vitals and AR game progress.</p>
-        </article>
+        <div id="anatomy-game-view" class="anatomy-view hidden">
+          <article class="analysis-box">
+            <h4>Current Exercise</h4>
+            <p id="left-game-action-title">--</p>
+            <p id="left-game-action-desc">--</p>
+          </article>
 
-        <article class="analysis-box anatomy-note">
-          <h4>Flow</h4>
-          <p>1) Run intake scan and confirm highlighted target zone.<br>2) Tap next to enter AR game with voice guidance.<br>3) Finish actions and review summary with AI analysis.</p>
-        </article>
+          <article class="analysis-box">
+            <h4>Game Impact</h4>
+            <p id="left-game-impact">Each rep improves recovery and builds the world.</p>
+          </article>
+
+          <div class="body-map-wrap tracker-wrap">
+            <canvas id="game-tracker-canvas" class="bodymap-canvas"></canvas>
+          </div>
+
+          <div class="left-reps-card">
+            <span>Reps</span>
+            <strong id="left-game-reps">0 / 0</strong>
+          </div>
+
+          <article class="analysis-box">
+            <h4>Next Up</h4>
+            <p id="left-game-next">--</p>
+          </article>
+        </div>
       </article>
 
       <article class="panel camera-panel">
         <div class="panel-head">
-          <h2>Camera + AR Overlays</h2>
-          <p>Aura scan, thermal map, neural ghost, and recovery game overlay run on this live feed.</p>
+          <h2>Camera + Recovery World</h2>
+          <p>Live scan feed, AR overlays, and isometric recovery gameplay.</p>
         </div>
 
         <div id="camera-stage" class="camera-stage">
@@ -99,6 +126,12 @@
           <canvas id="thermal-overlay-canvas" class="thermal-canvas"></canvas>
           <canvas id="neural-ghost-canvas" class="ghost-canvas"></canvas>
           <canvas id="game-overlay-canvas" class="game-canvas"></canvas>
+          <div class="scan-top-hud">
+            <div class="scan-brand">HYDRA-V</div>
+            <div class="scan-status-dot"></div>
+            <div class="scan-status-text">BODY SCAN ACTIVE</div>
+            <div id="scan-inline-progress" class="scan-timer">00:60</div>
+          </div>
           <div class="stage-chip left">Anatomy + Metrics Overlay</div>
           <div class="stage-chip right">AR Recovery Overlay</div>
 
@@ -122,6 +155,25 @@
             <div class="metric metric-float"><span>Live Micro</span><strong id="metric-micro">-- Hz</strong></div>
             <div class="metric metric-float"><span>Plasticity</span><strong id="metric-plasticity">-- / 10</strong></div>
           </div>
+
+          <aside class="game-build-panel">
+            <h4>Build Progress</h4>
+            <div class="world-overall">
+              <span>Overall</span>
+              <strong id="world-build-overall">0 / 35</strong>
+            </div>
+            <div class="world-progress-track">
+              <div id="world-build-fill"></div>
+            </div>
+            <div class="world-sections">
+              <div><span>Foundation</span><strong id="world-build-foundation">0 / 9</strong></div>
+              <div><span>Walls</span><strong id="world-build-walls">0 / 16</strong></div>
+              <div><span>Roof</span><strong id="world-build-roof">0 / 9</strong></div>
+              <div><span>Peak</span><strong id="world-build-peak">0 / 1</strong></div>
+            </div>
+            <h5>Action Log</h5>
+            <ul id="world-action-log" class="world-log"></ul>
+          </aside>
         </div>
 
         <div class="flow-side">
@@ -161,8 +213,13 @@
             </div>
 
             <article class="analysis-box">
-              <h4 id="game-action-title">Action</h4>
+              <h4 id="game-action-title">Current Exercise</h4>
               <p id="game-action-desc">The next rehab action will appear here.</p>
+            </article>
+
+            <article class="analysis-box">
+              <h4>Game Impact</h4>
+              <p id="game-impact-text">Each rep places blocks in your recovery world.</p>
             </article>
 
             <div class="game-stats">
@@ -171,6 +228,11 @@
               <div><span>Actions</span><strong id="game-actions-count">0 / 0</strong></div>
               <div><span>Motion Sync</span><strong id="game-motion-sync">-- %</strong></div>
             </div>
+
+            <article class="analysis-box game-nextup-box">
+              <h4>Next Up</h4>
+              <p id="game-next-up">--</p>
+            </article>
 
             <div class="progress-track"><div id="game-progress-fill"></div></div>
 
@@ -284,21 +346,6 @@
           <strong id="gate-offset-value">100 ms</strong>
         </label>
 
-        <label class="field">
-          <span>Device Name Prefix</span>
-          <input id="device-prefix" type="text" value="Hydrawav3" autocomplete="off">
-        </label>
-
-        <label class="field">
-          <span>BLE Service UUID</span>
-          <input id="service-uuid" type="text" value="6e400001-b5a3-f393-e0a9-e50e24dcca9e" autocomplete="off">
-        </label>
-
-        <label class="field">
-          <span>BLE Characteristic UUID</span>
-          <input id="char-uuid" type="text" value="6e400002-b5a3-f393-e0a9-e50e24dcca9e" autocomplete="off">
-        </label>
-
         <label class="checkbox">
           <input id="voice-enabled" type="checkbox">
           <span>Enable ElevenLabs narration</span>
@@ -314,15 +361,12 @@
       </div>
 
       <div class="button-row">
-        <button id="connect-ble" type="button">Connect BLE</button>
-        <button id="disconnect-ble" type="button" class="ghost">Disconnect BLE</button>
         <button id="toggle-gating" type="button" class="ghost">Toggle Gating</button>
       </div>
 
       <div class="metric-grid compact">
         <div class="metric"><span>Gate Count</span><strong id="metric-gate-count">0</strong></div>
         <div class="metric"><span>Last Delay</span><strong id="metric-last-delay">-- ms</strong></div>
-        <div class="metric"><span>BLE Failures</span><strong id="metric-ble-failures">0</strong></div>
         <div class="metric"><span>Sequence</span><strong id="metric-seq-id">0</strong></div>
       </div>
     </details>

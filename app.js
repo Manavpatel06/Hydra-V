@@ -3,7 +3,6 @@ import { EVENTS, HydraEventBus } from "./src/core/events.js";
 import { clamp, round, safeNumber } from "./src/core/utils.js";
 import { AuraScanEngine } from "./src/features/intake/AuraScanEngine.js";
 import { NeuralHandshakeEngine } from "./src/features/priming/NeuralHandshakeEngine.js";
-import { BLEHydrawavClient } from "./src/features/cardiac/BLEHydrawavClient.js";
 import { CardiacGatingEngine } from "./src/features/cardiac/CardiacGatingEngine.js";
 import { HydrawavMqttClient } from "./src/features/cardiac/HydrawavMqttClient.js";
 import { PlasticityScoreEstimator } from "./src/features/cardiac/PlasticityScoreEstimator.js";
@@ -57,7 +56,6 @@ const neuralHandshakeEngine = new NeuralHandshakeEngine({
   getPoseLandmarks: () => auraScanEngine.getLatestPoseLandmarks()
 });
 
-const bleClient = new BLEHydrawavClient(eventBus);
 const hydrawavMqttClient = new HydrawavMqttClient(eventBus, {
   loginProxyUrl: DEFAULTS.cardiac.mqtt.loginProxyUrl,
   publishProxyUrl: DEFAULTS.cardiac.mqtt.publishProxyUrl
@@ -65,7 +63,6 @@ const hydrawavMqttClient = new HydrawavMqttClient(eventBus, {
 const plasticityEstimator = new PlasticityScoreEstimator();
 const cardiacEngine = new CardiacGatingEngine({
   eventBus,
-  bleClient,
   plasticityEstimator,
   defaultOffsetMs: DEFAULTS.cardiac.gateOffsetMs
 });
@@ -91,6 +88,23 @@ const narrationManager = new NarrationManager({
 });
 
 const elements = {
+  appShell: byId("app-shell"),
+  anatomyPanel: byId("anatomy-panel"),
+  anatomyPanelTitle: byId("anatomy-panel-title"),
+  anatomyPanelSubtitle: byId("anatomy-panel-subtitle"),
+  anatomyScanView: byId("anatomy-scan-view"),
+  anatomyGameView: byId("anatomy-game-view"),
+  auraBodymapCanvas: byId("aura-bodymap-canvas"),
+  gameTrackerCanvas: byId("game-tracker-canvas"),
+  leftMetricPosture: byId("left-metric-posture"),
+  leftMetricHeart: byId("left-metric-heart"),
+  leftMetricBalance: byId("left-metric-balance"),
+  leftMetricJoint: byId("left-metric-joint"),
+  leftGameActionTitle: byId("left-game-action-title"),
+  leftGameActionDesc: byId("left-game-action-desc"),
+  leftGameImpact: byId("left-game-impact"),
+  leftGameReps: byId("left-game-reps"),
+  leftGameNext: byId("left-game-next"),
   stepIntake: byId("step-intake"),
   stepGame: byId("step-game"),
   stepSummary: byId("step-summary"),
@@ -104,7 +118,6 @@ const elements = {
   handshakeStatusPill: byId("handshake-status-pill"),
   cardiacStatusPill: byId("cardiac-engine-status"),
   deviceApiStatusPill: byId("device-api-status"),
-  bleStatusPill: byId("ble-status"),
   neuroPhasePill: byId("neuro-phase-status"),
   voiceStatusPill: byId("voice-status"),
   cameraStage: byId("camera-stage"),
@@ -116,6 +129,7 @@ const elements = {
   scanDurationInput: byId("intake-scan-duration"),
   startIntakeScanButton: byId("start-intake-scan"),
   intakeProgressLabel: byId("intake-progress-label"),
+  scanInlineProgress: byId("scan-inline-progress"),
   intakeAnalysisText: byId("intake-analysis-text"),
   intakeNextButton: byId("intake-next-button"),
   gameStartButton: byId("game-start-button"),
@@ -123,11 +137,20 @@ const elements = {
   gameStatus: byId("game-status"),
   gameActionTitle: byId("game-action-title"),
   gameActionDesc: byId("game-action-desc"),
+  gameImpactText: byId("game-impact-text"),
+  gameNextUp: byId("game-next-up"),
   gameScore: byId("game-score"),
   gameReps: byId("game-reps"),
   gameActionsCount: byId("game-actions-count"),
   gameMotionSync: byId("game-motion-sync"),
   gameProgressFill: byId("game-progress-fill"),
+  worldBuildOverall: byId("world-build-overall"),
+  worldBuildFill: byId("world-build-fill"),
+  worldBuildFoundation: byId("world-build-foundation"),
+  worldBuildWalls: byId("world-build-walls"),
+  worldBuildRoof: byId("world-build-roof"),
+  worldBuildPeak: byId("world-build-peak"),
+  worldActionLog: byId("world-action-log"),
   postscanStatus: byId("postscan-status"),
   summaryStatus: byId("summary-status"),
   summaryHrvDelta: byId("summary-hrv-delta"),
@@ -175,16 +198,10 @@ const elements = {
   mqttStopButton: byId("mqtt-stop"),
   gateOffsetInput: byId("gate-offset"),
   gateOffsetValue: byId("gate-offset-value"),
-  devicePrefixInput: byId("device-prefix"),
-  serviceUuidInput: byId("service-uuid"),
-  charUuidInput: byId("char-uuid"),
-  connectBleButton: byId("connect-ble"),
-  disconnectBleButton: byId("disconnect-ble"),
   toggleGatingButton: byId("toggle-gating"),
   voiceEnabledInput: byId("voice-enabled"),
   metricGateCount: byId("metric-gate-count"),
   metricLastDelay: byId("metric-last-delay"),
-  metricBleFailures: byId("metric-ble-failures"),
   metricSeqId: byId("metric-seq-id"),
   runtimeLog: byId("runtime-log")
 };
@@ -239,16 +256,25 @@ const gameEngine = new RecoveryGameEngine({
   onProgress: (payload) => {
     elements.gameScore.textContent = `${Math.round(payload.score)}%`;
     elements.gameReps.textContent = `${payload.repsDone} / ${payload.repsTarget}`;
+    elements.leftGameReps.textContent = `${payload.repsDone} / ${payload.repsTarget}`;
     elements.gameActionsCount.textContent = `${payload.actionsCompleted} / ${payload.actionsTotal}`;
     elements.gameMotionSync.textContent = Number.isFinite(payload.motionSyncScore)
       ? `${Math.round(payload.motionSyncScore)}%`
       : "-- %";
     elements.gameProgressFill.style.width = `${payload.score}%`;
     virtualRecoveryWorld.update(payload);
+    updateWorldBuildUi();
   },
   onActionChanged: (payload) => {
     elements.gameActionTitle.textContent = `Action ${payload.index + 1}: ${payload.label}`;
     elements.gameActionDesc.textContent = payload.description;
+    elements.leftGameActionTitle.textContent = payload.label;
+    elements.leftGameActionDesc.textContent = payload.description;
+    elements.gameImpactText.textContent = describeActionImpact(payload.id);
+    elements.leftGameImpact.textContent = describeActionImpact(payload.id);
+    elements.gameNextUp.textContent = payload.nextLabel || "Finalize build sequence";
+    elements.leftGameNext.textContent = payload.nextLabel || "Finalize build sequence";
+    appendWorldLog(`Action ${payload.index + 1} active: ${payload.label}`);
     void speakActionCue(payload);
   },
   onComplete: (summary) => {
@@ -318,15 +344,140 @@ function isWebGpuAvailable() {
 
 function setStage(stage) {
   state.stage = stage;
+  elements.appShell.classList.remove("stage-intake", "stage-game", "stage-postscan", "stage-summary");
+  elements.appShell.classList.add(`stage-${stage}`);
   elements.stageIntakePanel.classList.toggle("hidden", stage !== "intake");
   elements.stageGamePanel.classList.toggle("hidden", stage !== "game");
   elements.stagePostscanPanel.classList.toggle("hidden", stage !== "postscan");
   elements.stageSummaryPanel.classList.toggle("hidden", stage !== "summary");
   elements.summarySection.classList.toggle("hidden", stage !== "summary");
   elements.cameraStage.classList.toggle("game-mode", stage === "game");
+  updateAnatomyPanelForStage(stage);
   elements.stepIntake.classList.toggle("step-active", stage === "intake");
   elements.stepGame.classList.toggle("step-active", stage === "game" || stage === "postscan");
   elements.stepSummary.classList.toggle("step-active", stage === "summary");
+}
+
+function formatTimer(seconds) {
+  const total = Math.max(Math.floor(Number(seconds) || 0), 0);
+  const mm = String(Math.floor(total / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function setScanTimer(seconds) {
+  elements.scanInlineProgress.textContent = formatTimer(seconds);
+}
+
+function activeScanDurationSec(mode) {
+  if (mode === "baseline") {
+    return clamp(Number(elements.scanDurationInput.value) || DEFAULTS.auraScan.scanDurationSec, 20, 180);
+  }
+  if (mode === "post") {
+    return 20;
+  }
+  if (mode === "game-monitor") {
+    return 180;
+  }
+  return DEFAULTS.auraScan.scanDurationSec;
+}
+
+function describeActionImpact(actionId) {
+  const map = {
+    raise: "Raises a support beam in the virtual structure.",
+    cross: "Aligns wall bracing in your build.",
+    "elbow-drive": "Locks side support blocks into position.",
+    march: "Places stepping stones in foundation rows.",
+    "side-step": "Extends side walls for stability.",
+    hinge: "Anchors rear support joints.",
+    "mini-squat": "Lifts a foundation block into place.",
+    "step-lift": "Stacks a vertical support column.",
+    extension: "Extends a bridge panel toward completion."
+  };
+  return map[actionId] || "Builds and stabilizes your recovery world with each rep.";
+}
+
+function appendWorldLog(message) {
+  const li = document.createElement("li");
+  li.textContent = message;
+  elements.worldActionLog.prepend(li);
+  while (elements.worldActionLog.children.length > 8) {
+    elements.worldActionLog.removeChild(elements.worldActionLog.lastChild);
+  }
+}
+
+function resetWorldUi() {
+  elements.worldBuildOverall.textContent = "0 / 35";
+  elements.worldBuildFill.style.width = "0%";
+  elements.worldBuildFoundation.textContent = "0 / 9";
+  elements.worldBuildWalls.textContent = "0 / 16";
+  elements.worldBuildRoof.textContent = "0 / 9";
+  elements.worldBuildPeak.textContent = "0 / 1";
+  elements.worldActionLog.innerHTML = "";
+}
+
+function updateWorldBuildUi() {
+  const stats = virtualRecoveryWorld.getBuildStats();
+  if (!stats) {
+    return;
+  }
+  elements.worldBuildOverall.textContent = `${stats.totalPlaced} / ${stats.totalTarget}`;
+  elements.worldBuildFill.style.width = `${clamp((stats.totalPlaced / Math.max(stats.totalTarget, 1)) * 100, 0, 100)}%`;
+  elements.worldBuildFoundation.textContent = `${stats.foundation} / ${stats.targets.foundation}`;
+  elements.worldBuildWalls.textContent = `${stats.walls} / ${stats.targets.walls}`;
+  elements.worldBuildRoof.textContent = `${stats.roof} / ${stats.targets.roof}`;
+  elements.worldBuildPeak.textContent = `${stats.peak} / ${stats.targets.peak}`;
+}
+
+function updateAnatomyPanelForStage(stage) {
+  const gameLike = stage === "game" || stage === "postscan";
+  elements.anatomyScanView.classList.toggle("hidden", gameLike);
+  elements.anatomyGameView.classList.toggle("hidden", !gameLike);
+  if (gameLike) {
+    elements.anatomyPanelTitle.textContent = "Current Exercise";
+    elements.anatomyPanelSubtitle.textContent = "Track reps and movement while building progress.";
+  } else {
+    elements.anatomyPanelTitle.textContent = "Body Map";
+    elements.anatomyPanelSubtitle.textContent = "Cold-zone targeting with live scan metrics.";
+  }
+}
+
+function updateLeftScanMetrics(frame = {}) {
+  const symmetry = Number(frame.symmetryDeltaPct);
+  const readiness = Number(frame.readinessScore);
+  const heart = Number(frame.heartRateBpm);
+
+  if (Number.isFinite(heart)) {
+    elements.leftMetricHeart.textContent = `${round(heart, 1)} bpm`;
+  }
+  if (Number.isFinite(symmetry)) {
+    const posture = clamp(100 - symmetry * 2, 0, 100);
+    const balance = clamp(100 - symmetry * 1.4, 0, 100);
+    elements.leftMetricPosture.textContent = `${round(posture, 1)} %`;
+    elements.leftMetricBalance.textContent = `${round(balance, 1)} %`;
+  }
+  if (Number.isFinite(readiness)) {
+    elements.leftMetricJoint.textContent = readiness >= 7
+      ? "GOOD"
+      : readiness >= 5
+        ? "MODERATE"
+        : "NEEDS FOCUS";
+  }
+}
+
+function syncGameTrackerFromBodyMap() {
+  const src = elements.auraBodymapCanvas;
+  const dst = elements.gameTrackerCanvas;
+  if (!src || !dst || !src.width || !src.height) {
+    return;
+  }
+  if (dst.width !== src.width || dst.height !== src.height) {
+    dst.width = src.width;
+    dst.height = src.height;
+  }
+  const ctx = dst.getContext("2d");
+  ctx.clearRect(0, 0, dst.width, dst.height);
+  ctx.drawImage(src, 0, 0, dst.width, dst.height);
 }
 
 function setPill(element, text, type = "idle") {
@@ -542,6 +693,7 @@ function stopCamera() {
   state.cameraRunning = false;
   state.scanMode = null;
   state.gameRunning = false;
+  setScanTimer(clamp(Number(elements.scanDurationInput.value) || 60, 20, 180));
   log("Camera stopped.");
 }
 
@@ -554,7 +706,12 @@ function resetIntakeStageValues() {
   elements.metricAuraReadiness.textContent = "-- / 10";
   elements.metricAuraAlgorithm.textContent = "--";
   elements.metricAuraSource.textContent = "--";
+  elements.leftMetricPosture.textContent = "-- %";
+  elements.leftMetricHeart.textContent = "-- bpm";
+  elements.leftMetricBalance.textContent = "-- %";
+  elements.leftMetricJoint.textContent = "--";
   elements.intakeProgressLabel.textContent = "Scanning...";
+  setScanTimer(clamp(Number(elements.scanDurationInput.value) || 60, 20, 180));
   state.intakeReady = false;
   elements.intakeNextButton.disabled = true;
 }
@@ -562,6 +719,7 @@ function resetIntakeStageValues() {
 function startAuraScan(mode, durationSec) {
   state.scanMode = mode;
   auraScanEngine.startScan(durationSec);
+  setScanTimer(durationSec);
 }
 
 function readMqttConfigFromUi() {
@@ -711,12 +869,22 @@ async function beginGameFlow() {
   state.gameRunning = true;
   state.gameResult = null;
   virtualRecoveryWorld.start({ zone: focus.zone, side: focus.side });
+  resetWorldUi();
+  updateWorldBuildUi();
+  appendWorldLog(`Session started: ${focus.side} ${focus.zone} focus.`);
   elements.gameStatus.textContent = "Preparing guided game...";
   elements.gameProgressFill.style.width = "0%";
   elements.gameScore.textContent = "0%";
   elements.gameReps.textContent = "0 / 0";
   elements.gameActionsCount.textContent = "0 / 0";
   elements.gameMotionSync.textContent = "-- %";
+  elements.gameImpactText.textContent = "Each rep places blocks in your recovery world.";
+  elements.gameNextUp.textContent = "--";
+  elements.leftGameActionTitle.textContent = "Waiting for first action";
+  elements.leftGameActionDesc.textContent = "Stand in frame and follow the prompt.";
+  elements.leftGameImpact.textContent = "Each rep improves recovery and builds the world.";
+  elements.leftGameReps.textContent = "0 / 0";
+  elements.leftGameNext.textContent = "--";
 
   try {
     await neuroEngine.enableAudio();
@@ -757,6 +925,10 @@ async function handleGameComplete(summary) {
   state.gameRunning = false;
   state.gameResult = summary;
   virtualRecoveryWorld.stop();
+  updateWorldBuildUi();
+  appendWorldLog(`Build complete: ${Math.round(summary.score)}% quality score.`);
+  elements.gameNextUp.textContent = "Post-session scan and summary";
+  elements.leftGameNext.textContent = "Post-session scan and summary";
   elements.gameStatus.textContent = "Game complete. Starting post-session recheck...";
   log(`Game complete. Score ${summary.score}% with ${summary.actionsCompleted}/${summary.actionsTotal} actions. Motion sync ${summary.motionSyncAvg ?? "--"}%.`);
   if (state.scanMode === "game-monitor") {
@@ -933,11 +1105,20 @@ function resetForNewSession() {
   state.gameRunning = false;
   state.gameResult = null;
   elements.gameMotionSync.textContent = "-- %";
+  elements.gameImpactText.textContent = "Each rep places blocks in your recovery world.";
+  elements.gameNextUp.textContent = "--";
+  elements.leftGameActionTitle.textContent = "--";
+  elements.leftGameActionDesc.textContent = "--";
+  elements.leftGameImpact.textContent = "Each rep improves recovery and builds the world.";
+  elements.leftGameReps.textContent = "0 / 0";
+  elements.leftGameNext.textContent = "--";
   elements.intakeNextButton.disabled = true;
   elements.intakeProgressLabel.textContent = "Ready for 60-second scan.";
+  setScanTimer(clamp(Number(elements.scanDurationInput.value) || 60, 20, 180));
   elements.intakeAnalysisText.textContent = "Complete the intake scan to generate body-map analysis and session targets.";
   gameEngine.stop();
   virtualRecoveryWorld.stop();
+  resetWorldUi();
   neuralHandshakeEngine.stop();
   thermalEngine.clearOverlay();
   setStage("intake");
@@ -958,6 +1139,8 @@ function bindUi() {
   setPill(elements.voiceStatusPill, state.voiceEnabled ? "Enabled" : "Disabled", state.voiceEnabled ? "live" : "idle");
   window.addEventListener("pointerdown", () => { void narrationManager.primeAudio(); }, { once: true });
   elements.scanDurationInput.value = String(DEFAULTS.auraScan.scanDurationSec);
+  setScanTimer(DEFAULTS.auraScan.scanDurationSec);
+  resetWorldUi();
   elements.gateOffsetInput.value = String(DEFAULTS.cardiac.gateOffsetMs);
   elements.gateOffsetValue.textContent = `${DEFAULTS.cardiac.gateOffsetMs} ms`;
   elements.mqttApiBaseUrlInput.value = DEFAULTS.cardiac.mqtt.apiBaseUrl;
@@ -991,6 +1174,9 @@ function bindUi() {
       }
       elements.gameStatus.textContent = "Game stopped manually.";
       elements.gameMotionSync.textContent = "-- %";
+      elements.gameNextUp.textContent = "Restart when ready";
+      elements.leftGameNext.textContent = "Restart when ready";
+      appendWorldLog("Game stopped manually.");
       try {
         await publishHydrawavControlCommand(3, "stop");
       } catch (error) {
@@ -1060,19 +1246,6 @@ function bindUi() {
     elements.gateOffsetValue.textContent = `${value} ms`;
     cardiacEngine.setOffsetMs(value);
   });
-  elements.connectBleButton.addEventListener("click", async () => {
-    try {
-      await bleClient.connect({
-        deviceNamePrefix: elements.devicePrefixInput.value,
-        serviceUuid: elements.serviceUuidInput.value,
-        characteristicUuid: elements.charUuidInput.value
-      });
-      log(`BLE connected to ${bleClient.device?.name || "device"}.`);
-    } catch (error) {
-      log(`BLE connect failed: ${error.message}`, "warn");
-    }
-  });
-  elements.disconnectBleButton.addEventListener("click", () => { bleClient.disconnect(); });
   elements.toggleGatingButton.addEventListener("click", () => {
     if (cardiacEngine.isActive) {
       cardiacEngine.stop();
@@ -1093,12 +1266,16 @@ function bindEvents() {
     const status = event.detail.status || "idle";
     const type = status.includes("failed") ? "warn" : ((status.includes("scan") || status.includes("running")) ? "live" : "idle");
     setPill(elements.auraStatusPill, humanize(status), type);
+    if (status === "scanning") {
+      setScanTimer(activeScanDurationSec(state.scanMode));
+    }
     if (status === "camera_running") {
       state.cameraRunning = true;
       syncOverlayCanvasSize();
     }
     if (status === "camera_stopped") {
       state.cameraRunning = false;
+      setScanTimer(activeScanDurationSec("baseline"));
     }
   });
 
@@ -1122,7 +1299,12 @@ function bindEvents() {
     elements.metricAuraReadiness.textContent = Number.isFinite(d.readinessScore) ? `${round(d.readinessScore, 2)} / 10` : "-- / 10";
     elements.metricAuraAlgorithm.textContent = typeof d.algorithm === "string" && d.algorithm ? d.algorithm.toUpperCase() : "--";
     elements.metricAuraSource.textContent = typeof d.vitalsSource === "string" && d.vitalsSource ? d.vitalsSource : "--";
+    updateLeftScanMetrics(d);
+    syncGameTrackerFromBodyMap();
     const progress = clamp(Number(d.progress || 0), 0, 1);
+    const activeDuration = activeScanDurationSec(state.scanMode);
+    const remainingSec = Math.max(Math.ceil((1 - progress) * activeDuration), 0);
+    setScanTimer(remainingSec);
     if (state.scanMode === "baseline") {
       elements.intakeProgressLabel.textContent = `Intake scan progress ${Math.round(progress * 100)}%`;
     } else if (state.scanMode === "post") {
@@ -1138,6 +1320,7 @@ function bindEvents() {
       state.intakeReady = true;
       elements.intakeNextButton.disabled = false;
       elements.intakeProgressLabel.textContent = "Intake scan complete.";
+      setScanTimer(0);
       const focus = getFocusTarget();
       setSessionAndProtocolFocus(focus.zone, focus.side);
       elements.intakeAnalysisText.textContent = buildIntakeAnalysisText();
@@ -1152,6 +1335,7 @@ function bindEvents() {
     if (state.scanMode === "post") {
       state.postMetrics = d;
       state.scanMode = null;
+      setScanTimer(0);
       void finalizeSession();
       return;
     }
@@ -1195,13 +1379,6 @@ function bindEvents() {
     setPill(elements.cardiacStatusPill, active ? "Active" : "Idle", active ? "live" : "idle");
     elements.metricSeqId.textContent = String(event.detail.sequenceId ?? 0);
     elements.toggleGatingButton.textContent = active ? "Stop Gating" : "Start Gating";
-  });
-
-  eventBus.on(EVENTS.CARDIAC_TRANSPORT_STATUS, (event) => {
-    const status = event.detail.status || "disconnected";
-    const type = status === "connected" ? "live" : (status === "error" ? "warn" : "idle");
-    setPill(elements.bleStatusPill, humanize(status), type);
-    elements.metricBleFailures.textContent = String(event.detail.failedCount ?? 0);
   });
 
   eventBus.on(EVENTS.HYDRAWAV_MQTT_STATUS, (event) => {
@@ -1310,14 +1487,6 @@ function initializeBridge() {
     startCardiacGating() { cardiacEngine.start(); },
     stopCardiacGating() { cardiacEngine.stop(); },
     setGateOffsetMs(offsetMs) { cardiacEngine.setOffsetMs(offsetMs); },
-    async connectHydrawav3Ble(config = {}) {
-      await bleClient.connect({
-        deviceNamePrefix: config.deviceNamePrefix ?? elements.devicePrefixInput.value,
-        serviceUuid: config.serviceUuid ?? elements.serviceUuidInput.value,
-        characteristicUuid: config.characteristicUuid ?? elements.charUuidInput.value
-      });
-    },
-    disconnectHydrawav3Ble() { bleClient.disconnect(); },
     async loginHydrawavMqtt(credentials = {}) {
       return await hydrawavMqttClient.login({
         apiBaseUrl: credentials.apiBaseUrl || "",
@@ -1369,20 +1538,20 @@ async function bootstrap() {
   hydrateAdaptiveState();
   setStage("intake");
   cardiacEngine.emitStatus();
-  bleClient.emitStatus("disconnected", { sentCount: 0, failedCount: 0 });
   setPill(elements.auraStatusPill, "Idle", "idle");
   setPill(elements.thermalStatusPill, "Idle", "idle");
   setPill(elements.handshakeStatusPill, "Idle", "idle");
   setPill(elements.cardiacStatusPill, "Idle", "idle");
   setPill(elements.deviceApiStatusPill, "Logged Out", "idle");
-  setPill(elements.bleStatusPill, "Disconnected", "idle");
   setPill(elements.neuroPhasePill, "Idle", "idle");
   await checkRuntimeHealth();
-  if (!bleClient.isSupported()) {
-    log("Web Bluetooth is not supported in this browser. Use Chrome/Edge on HTTPS or localhost.", "warn");
-  }
   if (!auraScanEngine.isSupported()) {
     log("Camera APIs are not supported in this browser.", "warn");
+  }
+  try {
+    await startIntakeScanFlow();
+  } catch (error) {
+    log(`Auto intake start failed: ${error.message}`, "warn");
   }
   try {
     await ensureHydrawavReady("startup");
@@ -1392,13 +1561,6 @@ async function bootstrap() {
     log(`HydraWav API is required. Setup/login failed on startup: ${error.message}`, "warn");
   }
   log("HYDRA-V flow runtime initialized.");
-  if (DEFAULTS.auraScan.autoStartCamera) {
-    try {
-      await startIntakeScanFlow();
-    } catch (error) {
-      log(`Auto intake start failed: ${error.message}`, "warn");
-    }
-  }
 }
 
 bootstrap();

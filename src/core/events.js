@@ -15,7 +15,6 @@
   NEURAL_HANDSHAKE_PROGRESS: "hydrav:neural-handshake-progress",
 
   CARDIAC_ENGINE_STATUS: "hydrav:cardiac-engine-status",
-  CARDIAC_TRANSPORT_STATUS: "hydrav:cardiac-transport-status",
   CARDIAC_GATE_FIRED: "hydrav:cardiac-gate-fired",
   HYDRAWAV_MQTT_STATUS: "hydrav:hydrawav-mqtt-status",
   HYDRAWAV_MQTT_COMMAND: "hydrav:hydrawav-mqtt-command",
