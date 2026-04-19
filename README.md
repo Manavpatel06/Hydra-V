@@ -1,115 +1,106 @@
-﻿# HYDRA-V
-## Feature 1-5 Runtime (Hybrid JS + Python)
+# HYDRA-V
 
-This project now runs a hybrid architecture:
-1. **Frontend (JS)** for real-time camera UI, pose overlay, neural ghost rendering, and session controls.
-2. **Node runtime (`server.js`)** for secure API proxies (HydraWav + ElevenLabs + Python analytics bridge).
-3. **Python analytics service** for higher-quality Aura-Scan signal processing, RuView-style local vitals fusion, and thermal mapping.
+HYDRA-V is a hybrid web runtime for contactless intake, AR-guided recovery exercise, HydraWav hardware synchronization, and AI session analysis.
 
-All 5 features remain integrated.
+## Product Flow
+1. App boots and auto-starts intake camera flow.
+2. A 60-second intake scan computes heart rate, HRV, micro-saccades, symmetry, readiness, and flagged zones.
+3. Body map and thermal mapping identify focus zones and Sun/Moon pad targets.
+4. Recovery mode starts with HydraWav therapy command, cardiac gating, neural mirror priming, and neuroacoustic audio phases.
+5. AR exercise runs with translucent anatomy overlays plus a bottom-left movement preview for the current action.
+6. A 3D virtual game runs in the background and advances from real movement quality, reps, and progress.
+7. Post-session recheck runs, then REA AI analysis shows real deltas and next protocol recommendation.
 
-## Features
+## Runtime Stack
+- Frontend (`index.html`, `app.js`, `src/features/*`): camera layers, overlays, game loop, UI flow state.
+- Node gateway (`server.js`): static host, HydraWav API proxy, ElevenLabs TTS proxy, Python analytics proxy.
+- Python analytics (`python_service/`): Aura signal processing, RuView-style local fusion, thermal optical-flow analysis.
 
-### Feature 1 - Aura-Scan+
-- MediaPipe Pose + FaceMesh capture in browser.
-- Forehead rPPG sampling and eye motion telemetry.
-- Python analytics path (optional but enabled by default):
-  - HR estimation (Welch + bandpass)
-  - RR + RMSSD HRV
-  - micro-saccade rate
-  - readiness score
-  - RuView-style local heart/breath fusion (no external API required)
-- Automatic fallback to local JS metrics if Python service is unavailable.
+## Camera Layer Composition
+- `virtual-game-canvas`: 3D motivation world during exercise.
+- `aura-camera-canvas`: live camera feed.
+- `thermal-overlay-canvas`: thermal/body mask overlays.
+- `neural-ghost-canvas`: mirrored neural-handshake overlay.
+- `game-overlay-canvas`: action HUD + movement preview + guidance.
 
-### Feature 2 - Neural Handshake
-- Records healthy-side motion and mirrors to injured side as glowing ghost.
-- Auto-target from Aura-Scan flagged cold zone.
+## Core Output Contracts
+- Intake metrics: `heartRateBpm`, `rrIntervalMs`, `hrvRmssdMs`, `microsaccadeHz`, `symmetryDeltaPct`, `readinessScore`, `flaggedZones`, `algorithm`, `vitalsSource`.
+- Thermal metrics: `flaggedZones`, `zoneScores`, `chainTargets`, `recommendedPads.sun`, `recommendedPads.moon`, overlay anchors.
+- Game metrics: `score`, `actionsCompleted`, `actionsTotal`, `movementMatchScore`, `motionSyncScore`, `vitalsScore`, summary averages.
+- Session deltas: HRV/symmetry/micro/readiness deltas, ROM gain estimate, adaptive expected improvement and confidence.
 
-### Feature 3 - Cardiac Gating+
-- T-wave pulse scheduling (`80-120 ms` offset).
-- BLE transport support.
-- HydraWav official login/publish API support.
+## Prerequisites
+- Node.js 18+ (Node 20+ recommended).
+- Python 3.10+.
+- Webcam permissions.
+- Chrome/Edge recommended.
 
-### Feature 4 - Neuroacoustic Entrainment
-- Adaptive binaural phases (`pre -> during -> post`).
-- ElevenLabs narration integration.
-
-### Feature 5 - Fascial Thermal Mapping
-- 8-second camera scan captured from Aura camera canvas.
-- Python OpenCV Farneback optical-flow variance analysis.
-- Zone-level perfusion/cold scoring (`shoulder/hip/knee`, left/right).
-- Myofascial chain linking and dual-pad recommendation output (`sun` + `moon`).
-- AR-ready overlay anchors returned in API payload.
-
-## Run
-
-### 1) Node runtime
+## Setup
+1. Install Node dependencies.
 ```bash
-npm start
+npm install
 ```
-Or:
-```bash
-node server.js
-```
-
-### 2) Python analytics service (recommended)
+2. Setup Python environment.
 ```bash
 cd python_service
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+3. Create `.env` from `.env.example` and fill required keys.
+
+## Run
+1. Start Python service.
+```bash
+cd python_service
+.venv\Scripts\activate
 python main.py
 ```
+2. Start Node runtime in a second terminal.
+```bash
+cd ..
+npm start
+```
+3. Open `http://localhost:3000`.
 
-Default Python API: `http://127.0.0.1:8010`
-
-### 3) Open app
-- `http://localhost:3000`
-
-## Env Variables
-
-Set these in `.env`:
-
+## Environment Variables
 - `PORT=3000`
 - `ELEVENLABS_API_KEY=...`
-- `ELEVENLABS_VOICE_ID=...` (optional)
-- `ELEVENLABS_MODEL_ID=...` (optional)
-- `HYDRAWAV_API_BASE_URL=https://...`
-- `HYDRAWAV_USERNAME=...` (required for auto-auth)
-- `HYDRAWAV_PASSWORD=...` (required for auto-auth)
-
-Hybrid analytics:
+- `ELEVENLABS_VOICE_ID=...`
+- `ELEVENLABS_MODEL_ID=...`
+- `HYDRAWAV_API_BASE_URL=http://54.241.236.53:8080`
+- `HYDRAWAV_USERNAME=testpractitioner`
+- `HYDRAWAV_PASSWORD=1234`
 - `PY_AURA_API_BASE_URL=http://127.0.0.1:8010`
 - `AURA_USE_PYTHON_ANALYTICS=true`
 - `THERMAL_USE_PYTHON_ANALYTICS=true`
 - `AURA_PYTHON_TIMEOUT_MS=1500`
 - `THERMAL_PYTHON_TIMEOUT_MS=9000`
-
-RuView local fusion:
 - `RUVIEW_LOCAL_FUSION_ENABLED=true`
 
-## Key Endpoints
-
-Node:
+## HTTP APIs
 - `GET /api/health`
 - `POST /api/voice/elevenlabs/tts`
 - `POST /api/device/hydrawav/login`
 - `POST /api/device/hydrawav/publish`
-- `POST /api/aura/reset` (proxy to Python)
-- `POST /api/aura/analyze` (proxy to Python)
-- `POST /api/thermal/analyze` (proxy to Python)
+- `POST /api/aura/reset`
+- `POST /api/aura/analyze`
+- `POST /api/thermal/analyze`
 
-Python:
+Python service endpoints:
 - `GET /health`
 - `POST /aura/reset`
 - `POST /aura/analyze`
 - `POST /thermal/analyze`
 
-## Bridge Contract
+## Integration Bridge
+`window.HydraVBridge` exposes runtime controls for camera, intake scan, thermal scan, neural handshake, cardiac gating, HydraWav API calls, neuro session, narration, and live snapshot retrieval.
 
-`window.HydraVBridge` still exposes the full control surface for Features 1-5 and is backward compatible with previous integration methods.
+## Troubleshooting
+- Voice not playing: set `ELEVENLABS_API_KEY`, click once to prime browser audio, fallback browser speech is used if ElevenLabs fails.
+- HydraWav errors: verify API base URL, credentials, topic, MAC, and check `/api/health`.
+- Python analytics unavailable: verify service on `127.0.0.1:8010`; intake falls back to JS metrics when needed.
 
 ## Notes
-- Wellness-support software only (no diagnosis claims).
-- HydraWav payloads must be stringified JSON.
-- If Python service is down, Aura-Scan still runs via JS fallback.
+- Wellness support software only, not diagnostic software.
+- HydraWav publish payload must be a JSON string.
