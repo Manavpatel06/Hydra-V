@@ -52,6 +52,42 @@ function safeAngle(start, end) {
   return Math.atan2(end.y - start.y, end.x - start.x);
 }
 
+function angleDeg(a, b, c) {
+  if (!a || !b || !c) {
+    return null;
+  }
+
+  const abx = a.x - b.x;
+  const aby = a.y - b.y;
+  const cbx = c.x - b.x;
+  const cby = c.y - b.y;
+  const dot = abx * cbx + aby * cby;
+  const mag1 = Math.sqrt(abx * abx + aby * aby) || 1;
+  const mag2 = Math.sqrt(cbx * cbx + cby * cby) || 1;
+  const cos = clamp(dot / (mag1 * mag2), -1, 1);
+  return Math.acos(cos) * (180 / Math.PI);
+}
+
+function createLivePoseState() {
+  return {
+    rootOffsetX: 0,
+    rootOffsetY: 0,
+    hipsPitch: 0,
+    hipsYaw: 0,
+    spinePitch: 0,
+    chestPitch: 0,
+    headPitch: 0,
+    leftThighPitch: 0,
+    rightThighPitch: 0,
+    leftShinPitch: 0,
+    rightShinPitch: 0,
+    leftUpperDelta: 0,
+    rightUpperDelta: 0,
+    leftForeDelta: 0,
+    rightForeDelta: 0
+  };
+}
+
 function pickFirst(app, names) {
   for (const name of names) {
     const object = app?.findObjectByName?.(name);
@@ -152,6 +188,7 @@ export class SplineRecoveryWorld {
 
     this.lastUpperAngle = null;
     this.lastForeAngle = null;
+    this.livePoseState = createLivePoseState();
 
     this.storyChapter = STORY_CHAPTERS[0];
 
@@ -234,6 +271,7 @@ export class SplineRecoveryWorld {
     this.lastRepPulseAt = 0;
     this.lastUpperAngle = null;
     this.lastForeAngle = null;
+    this.livePoseState = createLivePoseState();
     this.storyChapter = STORY_CHAPTERS[0];
     this.sectionPlaced = {
       foundation: 0,
@@ -589,42 +627,119 @@ export class SplineRecoveryWorld {
   applyPoseToScene() {
     const landmarks = this.getPoseLandmarks?.();
     if (!Array.isArray(landmarks) || landmarks.length < 17) {
+      this.livePoseState = createLivePoseState();
       return;
     }
 
+    const nextLivePose = createLivePoseState();
     const sourceShoulder = this.side === "left" ? landmarks[12] : landmarks[11];
     const sourceElbow = this.side === "left" ? landmarks[14] : landmarks[13];
     const sourceWrist = this.side === "left" ? landmarks[16] : landmarks[15];
     const upperAngle = safeAngle(sourceShoulder, sourceElbow);
     const foreAngle = safeAngle(sourceElbow, sourceWrist);
-    if (!Number.isFinite(upperAngle) || !Number.isFinite(foreAngle)) {
-      return;
+    if (Number.isFinite(upperAngle) && Number.isFinite(foreAngle)) {
+      const smooth = 0.26;
+      this.lastUpperAngle = Number.isFinite(this.lastUpperAngle)
+        ? this.lastUpperAngle + (upperAngle - this.lastUpperAngle) * smooth
+        : upperAngle;
+      this.lastForeAngle = Number.isFinite(this.lastForeAngle)
+        ? this.lastForeAngle + (foreAngle - this.lastForeAngle) * smooth
+        : foreAngle;
+
+      const mirrorOffset = Math.PI / 2;
+      const relativeFore = this.lastForeAngle - this.lastUpperAngle;
+
+      if (this.side === "left") {
+        const upperBase = this.getBase(this.armTargets.leftUpper, "rotation", "z", Number(this.armTargets.leftUpper?.rotation?.z) || 0);
+        const foreBase = this.getBase(this.armTargets.leftFore, "rotation", "z", Number(this.armTargets.leftFore?.rotation?.z) || 0);
+        nextLivePose.leftUpperDelta = (this.lastUpperAngle + mirrorOffset) - upperBase;
+        nextLivePose.leftForeDelta = relativeFore - foreBase;
+      } else {
+        const upperBase = this.getBase(this.armTargets.rightUpper, "rotation", "z", Number(this.armTargets.rightUpper?.rotation?.z) || 0);
+        const foreBase = this.getBase(this.armTargets.rightFore, "rotation", "z", Number(this.armTargets.rightFore?.rotation?.z) || 0);
+        nextLivePose.rightUpperDelta = (this.lastUpperAngle + mirrorOffset) - upperBase;
+        nextLivePose.rightForeDelta = relativeFore - foreBase;
+      }
     }
 
-    const smooth = 0.26;
-    this.lastUpperAngle = Number.isFinite(this.lastUpperAngle)
-      ? this.lastUpperAngle + (upperAngle - this.lastUpperAngle) * smooth
-      : upperAngle;
-    this.lastForeAngle = Number.isFinite(this.lastForeAngle)
-      ? this.lastForeAngle + (foreAngle - this.lastForeAngle) * smooth
-      : foreAngle;
+    const sideIndexes = this.side === "right"
+      ? { shoulder: 12, hip: 24, knee: 26, ankle: 28 }
+      : { shoulder: 11, hip: 23, knee: 25, ankle: 27 };
+    const oppositeIndexes = this.side === "right"
+      ? { hip: 23, knee: 25, ankle: 27 }
+      : { hip: 24, knee: 26, ankle: 28 };
 
-    const mirrorOffset = Math.PI / 2;
-    const relativeFore = this.lastForeAngle - this.lastUpperAngle;
+    const activeShoulder = landmarks[sideIndexes.shoulder];
+    const activeHip = landmarks[sideIndexes.hip];
+    const activeKnee = landmarks[sideIndexes.knee];
+    const activeAnkle = landmarks[sideIndexes.ankle];
+    const oppositeHip = landmarks[oppositeIndexes.hip];
+    const oppositeKnee = landmarks[oppositeIndexes.knee];
+    const oppositeAnkle = landmarks[oppositeIndexes.ankle];
+    const sideSign = this.side === "right" ? 1 : -1;
+    const actionId = this.currentActionId || this.zone;
 
-    const primaryUpper = this.side === "left" ? this.armTargets.leftUpper : this.armTargets.rightUpper;
-    const primaryFore = this.side === "left" ? this.armTargets.leftFore : this.armTargets.rightFore;
-    const primaryHand = this.side === "left" ? this.armTargets.leftHand : this.armTargets.rightHand;
+    const applyActiveLeg = (thighPitch, shinPitch) => {
+      if (this.side === "left") {
+        nextLivePose.leftThighPitch = thighPitch;
+        nextLivePose.leftShinPitch = shinPitch;
+      } else {
+        nextLivePose.rightThighPitch = thighPitch;
+        nextLivePose.rightShinPitch = shinPitch;
+      }
+    };
 
-    if (primaryUpper?.rotation) {
-      primaryUpper.rotation.z = this.lastUpperAngle + mirrorOffset;
+    const applyOppositeLeg = (thighPitch, shinPitch) => {
+      if (this.side === "left") {
+        nextLivePose.rightThighPitch = thighPitch;
+        nextLivePose.rightShinPitch = shinPitch;
+      } else {
+        nextLivePose.leftThighPitch = thighPitch;
+        nextLivePose.leftShinPitch = shinPitch;
+      }
+    };
+
+    if (actionId === "mini-squat" && activeHip && activeKnee && activeAnkle && oppositeHip && oppositeKnee && oppositeAnkle) {
+      const leftAngle = angleDeg(activeHip, activeKnee, activeAnkle);
+      const rightAngle = angleDeg(oppositeHip, oppositeKnee, oppositeAnkle);
+      const activeDepth = Number.isFinite(leftAngle) ? clamp((170 - leftAngle) / 55, 0, 1) : 0;
+      const oppositeDepth = Number.isFinite(rightAngle) ? clamp((170 - rightAngle) / 55, 0, 1) : 0;
+      const depth = (activeDepth + oppositeDepth) * 0.5;
+      nextLivePose.rootOffsetY = -depth * 0.09;
+      nextLivePose.hipsPitch = -depth * 0.3;
+      nextLivePose.spinePitch = depth * 0.14;
+      nextLivePose.leftThighPitch = -depth * 0.44;
+      nextLivePose.rightThighPitch = -depth * 0.44;
+      nextLivePose.leftShinPitch = depth * 0.34;
+      nextLivePose.rightShinPitch = depth * 0.34;
+    } else if ((actionId === "march" || actionId === "step-lift") && activeHip && activeKnee && activeAnkle) {
+      const lift = clamp((activeHip.y - activeKnee.y + 0.01) / 0.18, 0, 1);
+      applyActiveLeg(-lift * 0.88, lift * 0.5);
+      applyOppositeLeg(lift * 0.12, 0);
+      nextLivePose.rootOffsetY = lift * 0.04;
+      nextLivePose.hipsYaw = lift * sideSign * 0.12;
+      nextLivePose.spinePitch = -lift * 0.08;
+    } else if (actionId === "side-step" && activeHip && activeAnkle) {
+      const lateral = clamp(Math.abs(activeAnkle.x - activeHip.x) / 0.22, 0, 1);
+      nextLivePose.rootOffsetX = clamp((activeAnkle.x - activeHip.x) * 1.8, -0.28, 0.28);
+      nextLivePose.hipsYaw = nextLivePose.rootOffsetX * 0.45;
+      nextLivePose.chestPitch = lateral * 0.08;
+      applyActiveLeg(-lateral * 0.22, lateral * 0.05);
+    } else if (actionId === "hinge" && activeShoulder && activeHip) {
+      const forward = clamp(Math.abs(activeShoulder.x - activeHip.x) / 0.18, 0, 1);
+      nextLivePose.hipsPitch = -forward * 0.56;
+      nextLivePose.spinePitch = forward * 0.36;
+      nextLivePose.chestPitch = forward * 0.18;
+      nextLivePose.headPitch = -forward * 0.08;
+      nextLivePose.leftThighPitch = -forward * 0.16;
+      nextLivePose.rightThighPitch = -forward * 0.16;
+    } else if (actionId === "extension" && activeKnee && activeAnkle) {
+      const extension = clamp(Math.abs(activeAnkle.x - activeKnee.x) / 0.18, 0, 1);
+      applyActiveLeg(-extension * 0.26, extension * 0.68);
+      nextLivePose.rootOffsetY = extension * 0.02;
     }
-    if (primaryFore?.rotation) {
-      primaryFore.rotation.z = relativeFore;
-    }
-    if (primaryHand?.rotation && Number.isFinite(primaryHand.rotation.z)) {
-      primaryHand.rotation.z = primaryHand.rotation.z * 0.85 + 0.15 * 0.16;
-    }
+
+    this.livePoseState = nextLivePose;
   }
 
   applyActionAnimation(now) {
@@ -664,6 +779,7 @@ export class SplineRecoveryWorld {
     const rightUpperBaseZ = this.getBase(this.armTargets.rightUpper, "rotation", "z", Number(this.armTargets.rightUpper?.rotation?.z) || 0);
     const leftForeBaseZ = this.getBase(this.armTargets.leftFore, "rotation", "z", Number(this.armTargets.leftFore?.rotation?.z) || 0);
     const rightForeBaseZ = this.getBase(this.armTargets.rightFore, "rotation", "z", Number(this.armTargets.rightFore?.rotation?.z) || 0);
+    const live = this.livePoseState || createLivePoseState();
 
     let rootOffsetX = 0;
     let rootOffsetY = 0;
@@ -753,24 +869,24 @@ export class SplineRecoveryWorld {
       rootOffsetY = kick * 0.03;
     }
 
-    this.drivePosition(root, "x", rootBaseX + rootOffsetX, 0.2);
-    this.drivePosition(root, "y", rootBaseY + rootOffsetY, 0.22);
+    this.drivePosition(root, "x", rootBaseX + live.rootOffsetX + rootOffsetX, 0.2);
+    this.drivePosition(root, "y", rootBaseY + live.rootOffsetY + rootOffsetY, 0.22);
 
-    this.driveRotation(hips, "x", hipsBaseX + hipsPitch, 0.24);
-    this.driveRotation(hips, "y", hipsBaseY + hipsYaw, 0.2);
-    this.driveRotation(spine, "x", spineBaseX + spinePitch, 0.2);
-    this.driveRotation(chest, "x", chestBaseX + chestPitch, 0.2);
-    this.driveRotation(head, "x", headBaseX + headPitch, 0.15);
+    this.driveRotation(hips, "x", hipsBaseX + live.hipsPitch + hipsPitch, 0.24);
+    this.driveRotation(hips, "y", hipsBaseY + live.hipsYaw + hipsYaw, 0.2);
+    this.driveRotation(spine, "x", spineBaseX + live.spinePitch + spinePitch, 0.2);
+    this.driveRotation(chest, "x", chestBaseX + live.chestPitch + chestPitch, 0.2);
+    this.driveRotation(head, "x", headBaseX + live.headPitch + headPitch, 0.15);
 
-    this.driveRotation(leftThigh, "x", leftThighBaseX + leftThighPitch, 0.22);
-    this.driveRotation(rightThigh, "x", rightThighBaseX + rightThighPitch, 0.22);
-    this.driveRotation(leftShin, "x", leftShinBaseX + leftShinPitch, 0.22);
-    this.driveRotation(rightShin, "x", rightShinBaseX + rightShinPitch, 0.22);
+    this.driveRotation(leftThigh, "x", leftThighBaseX + live.leftThighPitch + leftThighPitch, 0.22);
+    this.driveRotation(rightThigh, "x", rightThighBaseX + live.rightThighPitch + rightThighPitch, 0.22);
+    this.driveRotation(leftShin, "x", leftShinBaseX + live.leftShinPitch + leftShinPitch, 0.22);
+    this.driveRotation(rightShin, "x", rightShinBaseX + live.rightShinPitch + rightShinPitch, 0.22);
 
-    this.driveRotation(this.armTargets.leftUpper, "z", leftUpperBaseZ + leftUpperDelta, 0.24);
-    this.driveRotation(this.armTargets.rightUpper, "z", rightUpperBaseZ + rightUpperDelta, 0.24);
-    this.driveRotation(this.armTargets.leftFore, "z", leftForeBaseZ + leftForeDelta, 0.24);
-    this.driveRotation(this.armTargets.rightFore, "z", rightForeBaseZ + rightForeDelta, 0.24);
+    this.driveRotation(this.armTargets.leftUpper, "z", leftUpperBaseZ + live.leftUpperDelta + leftUpperDelta, 0.24);
+    this.driveRotation(this.armTargets.rightUpper, "z", rightUpperBaseZ + live.rightUpperDelta + rightUpperDelta, 0.24);
+    this.driveRotation(this.armTargets.leftFore, "z", leftForeBaseZ + live.leftForeDelta + leftForeDelta, 0.24);
+    this.driveRotation(this.armTargets.rightFore, "z", rightForeBaseZ + live.rightForeDelta + rightForeDelta, 0.24);
   }
 
   applyProgressPulse(now) {

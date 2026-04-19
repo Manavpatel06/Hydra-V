@@ -68,7 +68,7 @@
   game: {
     useMirrorMotionAdapter: true,
     useMirrorMotionOnLeftShoulder: true,
-    worldEngine: "hybrid",
+    worldEngine: "three",
     splineSceneUrl: "https://prod.spline.design/8yRm8xEBLtMg0FLZ/scene.splinecode"
   },
   voice: {
@@ -76,10 +76,12 @@
     proxyUrl: "/api/voice/elevenlabs/tts",
     voiceId: "EXAVITQu4vr4xnSDxMaL",
     modelId: "eleven_turbo_v2_5",
+    playbackRate: 0.97,
+    summaryPlaybackRate: 0.9,
     voiceSettings: {
-      stability: 0.45,
+      stability: 0.58,
       similarityBoost: 0.8,
-      style: 0.2,
+      style: 0.14,
       useSpeakerBoost: true
     }
   }

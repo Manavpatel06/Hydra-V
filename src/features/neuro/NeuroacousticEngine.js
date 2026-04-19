@@ -22,6 +22,7 @@ export class NeuroacousticEngine {
     this.sessionStartedAtMs = null;
     this.sessionTotalMs = 0;
     this.sessionTicker = null;
+    this.speakerPulseTimer = null;
   }
 
   async enableAudio() {
@@ -40,6 +41,9 @@ export class NeuroacousticEngine {
     }
 
     this.setMasterGain(this.masterGainValue, 0.15);
+    if (this.currentPhase !== "idle") {
+      this.startSpeakerPulseLoop();
+    }
   }
 
   setupAudioGraph() {
@@ -62,14 +66,10 @@ export class NeuroacousticEngine {
 
     const pulseOsc = this.audioContext.createOscillator();
     pulseOsc.type = "triangle";
-    const pulseToneGain = this.audioContext.createGain();
-    pulseToneGain.gain.value = 0.018;
+    const pulseEnvelope = this.audioContext.createGain();
+    pulseEnvelope.gain.value = 0;
     const pulseLevel = this.audioContext.createGain();
     pulseLevel.gain.value = 0;
-    const beatLfo = this.audioContext.createOscillator();
-    beatLfo.type = "sine";
-    const beatDepth = this.audioContext.createGain();
-    beatDepth.gain.value = 0.012;
 
     const dynamics = this.audioContext.createDynamicsCompressor();
     dynamics.threshold.value = -18;
@@ -87,10 +87,8 @@ export class NeuroacousticEngine {
     leftGain.connect(leftPan);
     rightGain.connect(rightPan);
 
-    pulseOsc.connect(pulseToneGain);
-    pulseToneGain.connect(pulseLevel);
-    beatLfo.connect(beatDepth);
-    beatDepth.connect(pulseToneGain.gain);
+    pulseOsc.connect(pulseEnvelope);
+    pulseEnvelope.connect(pulseLevel);
 
     leftPan.connect(dynamics);
     rightPan.connect(dynamics);
@@ -101,7 +99,6 @@ export class NeuroacousticEngine {
     leftOsc.start(now);
     rightOsc.start(now);
     pulseOsc.start(now);
-    beatLfo.start(now);
 
     this.nodes = {
       leftOsc,
@@ -109,10 +106,8 @@ export class NeuroacousticEngine {
       leftGain,
       rightGain,
       pulseOsc,
-      pulseToneGain,
+      pulseEnvelope,
       pulseLevel,
-      beatLfo,
-      beatDepth,
       dynamics,
       master
     };
@@ -161,6 +156,51 @@ export class NeuroacousticEngine {
     this.nodes.pulseLevel.gain.linearRampToValueAtTime(level, now + rampSeconds);
   }
 
+  triggerSpeakerPulse(intensity = 1) {
+    if (!this.nodes || !this.audioContext) {
+      return;
+    }
+
+    const now = this.audioContext.currentTime;
+    const amount = clamp(intensity, 0.18, 1);
+    const floor = 0.004;
+    const peak = 0.065 * amount;
+    const attack = 0.012;
+    const decay = clamp(0.085 - this.currentBeatHz * 0.0011, 0.03, 0.085);
+
+    this.nodes.pulseEnvelope.gain.cancelScheduledValues(now);
+    this.nodes.pulseEnvelope.gain.setValueAtTime(floor, now);
+    this.nodes.pulseEnvelope.gain.linearRampToValueAtTime(peak, now + attack);
+    this.nodes.pulseEnvelope.gain.exponentialRampToValueAtTime(Math.max(floor, peak * 0.16), now + decay);
+  }
+
+  scheduleSpeakerPulse() {
+    if (this.currentPhase === "idle") {
+      return;
+    }
+
+    const intervalMs = 1000 / Math.max(Math.min(this.currentBeatHz, 18), 2);
+    this.triggerSpeakerPulse(this.currentPhase === "during" ? 1 : 0.9);
+    this.speakerPulseTimer = window.setTimeout(() => {
+      this.scheduleSpeakerPulse();
+    }, intervalMs);
+  }
+
+  startSpeakerPulseLoop() {
+    this.stopSpeakerPulseLoop();
+    if (this.currentPhase === "idle") {
+      return;
+    }
+    this.scheduleSpeakerPulse();
+  }
+
+  stopSpeakerPulseLoop() {
+    if (this.speakerPulseTimer) {
+      clearTimeout(this.speakerPulseTimer);
+      this.speakerPulseTimer = null;
+    }
+  }
+
   applyCarrierAndBeat(carrierHz, beatHz, rampSeconds = 0.25) {
     if (!this.nodes) {
       return;
@@ -176,16 +216,18 @@ export class NeuroacousticEngine {
 
     this.nodes.leftOsc.frequency.cancelScheduledValues(now);
     this.nodes.rightOsc.frequency.cancelScheduledValues(now);
-    this.nodes.beatLfo.frequency.cancelScheduledValues(now);
     this.nodes.pulseOsc.frequency.cancelScheduledValues(now);
 
     this.nodes.leftOsc.frequency.linearRampToValueAtTime(leftFrequency, now + rampSeconds);
     this.nodes.rightOsc.frequency.linearRampToValueAtTime(rightFrequency, now + rampSeconds);
-    this.nodes.beatLfo.frequency.linearRampToValueAtTime(boundedBeat, now + rampSeconds);
     this.nodes.pulseOsc.frequency.linearRampToValueAtTime(
-      clamp(carrierHz * 0.56, 84, 176),
+      clamp(carrierHz * 0.5, 74, 164),
       now + rampSeconds
     );
+
+    if (this.currentPhase !== "idle") {
+      this.startSpeakerPulseLoop();
+    }
   }
 
   updateBiometrics(frame = {}) {
@@ -229,12 +271,14 @@ export class NeuroacousticEngine {
     this.currentPhase = phase;
 
     if (phase === "idle") {
+      this.stopSpeakerPulseLoop();
       this.setStereoVolume(0, 0.25);
       this.setPulseVolume(0, 0.2);
     } else {
-      this.setStereoVolume(0.28, 0.25);
-      this.setPulseVolume(0.92, 0.2);
+      this.setStereoVolume(0.24, 0.25);
+      this.setPulseVolume(1, 0.15);
       this.retargetBeat(phase);
+      this.startSpeakerPulseLoop();
     }
 
     this.eventBus.emit(EVENTS.NEURO_PHASE_CHANGED, {
@@ -300,6 +344,8 @@ export class NeuroacousticEngine {
       clearInterval(this.sessionTicker);
       this.sessionTicker = null;
     }
+
+    this.stopSpeakerPulseLoop();
 
     this.phaseEndAtMs = null;
     this.sessionPlan = null;

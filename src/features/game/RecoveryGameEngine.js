@@ -119,6 +119,7 @@ export class RecoveryGameEngine {
     this.motionSyncSamples = [];
     this.movementMatchSamples = [];
     this.vitalsScoreSamples = [];
+    this.actionTelemetry = [];
     this.latestMotionSample = null;
     this.latestLandmarks = null;
     this.previewAction = null;
@@ -188,6 +189,19 @@ export class RecoveryGameEngine {
     this.motionSyncSamples = [];
     this.movementMatchSamples = [];
     this.vitalsScoreSamples = [];
+    this.actionTelemetry = this.actions.map((action) => ({
+      id: action.id,
+      label: action.label,
+      repsTarget: action.repsTarget,
+      samples: 0,
+      movementMatchSum: 0,
+      trackingSum: 0,
+      motionSyncSum: 0,
+      vitalsSum: 0,
+      repsCompleted: 0,
+      completed: false,
+      skipped: false
+    }));
     this.latestMotionSample = null;
     this.latestLandmarks = null;
     this.previewAction = this.actions[0] || null;
@@ -237,6 +251,8 @@ export class RecoveryGameEngine {
     const vitalScoreAvg = this.vitalsScoreSamples.length
       ? this.vitalsScoreSamples.reduce((sum, value) => sum + value, 0) / this.vitalsScoreSamples.length
       : null;
+    const requiredMatchScore = this.getRepMatchThreshold() * 100;
+    const requiredTrackingScore = this.getTrackingThreshold() * 100;
 
     return {
       zone: this.zone,
@@ -252,6 +268,20 @@ export class RecoveryGameEngine {
       vitalScoreAvg: Number.isFinite(vitalScoreAvg) ? Math.round(vitalScoreAvg) : null,
       completedActions: [...this.completedActions],
       skippedActions: [...this.skippedActions],
+      actionBreakdown: this.actionTelemetry.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        repsTarget: entry.repsTarget,
+        repsCompleted: entry.repsCompleted,
+        completed: entry.completed,
+        skipped: entry.skipped,
+        avgMovementMatch: entry.samples ? Math.round(entry.movementMatchSum / entry.samples) : null,
+        avgTrackingConfidence: entry.samples ? Math.round(entry.trackingSum / entry.samples) : null,
+        avgMotionSync: entry.samples ? Math.round(entry.motionSyncSum / entry.samples) : null,
+        avgVitals: entry.samples ? Math.round(entry.vitalsSum / entry.samples) : null,
+        requiredMatchScore,
+        requiredTrackingScore
+      })),
       curriculum: this.activeCurriculum
     };
   }
@@ -323,6 +353,13 @@ export class RecoveryGameEngine {
     }
 
     return count ? score / count : 0.5;
+  }
+
+  getActionTelemetry(action) {
+    if (!action) {
+      return null;
+    }
+    return this.actionTelemetry.find((entry) => entry.id === action.id) || null;
   }
 
   computeMovementMatch(action, sample, motionSample) {
@@ -409,7 +446,7 @@ export class RecoveryGameEngine {
     this.progressScore = forcePerfectFinish
       ? 100
       : this.computeProgressScore(0, vitalsScore);
-    this.emitProgress(this.latestMotionSample, forcePerfectFinish ? 1 : 0, vitalsScore);
+    this.emitProgress(this.latestMotionSample, forcePerfectFinish ? 1 : 0, vitalsScore, null);
     this.drawOverlay(null, true, this.latestMotionSample);
     const summary = this.getSummary();
     this.onComplete?.(summary);
@@ -417,6 +454,12 @@ export class RecoveryGameEngine {
   }
 
   advanceToNextAction({ forcePerfectFinish = true } = {}) {
+    const action = this.actions[this.currentActionIndex];
+    const telemetry = this.getActionTelemetry(action);
+    if (telemetry) {
+      telemetry.repsCompleted = Math.max(telemetry.repsCompleted, this.currentRepCount);
+      telemetry.completed = forcePerfectFinish || telemetry.repsCompleted >= telemetry.repsTarget;
+    }
     this.currentActionIndex += 1;
     this.currentRepCount = 0;
     this.upSeen = false;
@@ -438,6 +481,12 @@ export class RecoveryGameEngine {
       return null;
     }
 
+    const telemetry = this.getActionTelemetry(action);
+    if (telemetry) {
+      telemetry.skipped = true;
+      telemetry.repsCompleted = Math.max(telemetry.repsCompleted, this.currentRepCount);
+    }
+
     this.skippedActions.push({
       id: action.id,
       label: action.label,
@@ -455,7 +504,7 @@ export class RecoveryGameEngine {
 
     const vitalsScore = this.computeVitalsScore();
     this.progressScore = this.computeProgressScore(0, vitalsScore);
-    this.emitProgress(this.latestMotionSample, 0, vitalsScore);
+    this.emitProgress(this.latestMotionSample, 0, vitalsScore, null);
     this.drawOverlay(null, false, this.latestMotionSample);
 
     return {
@@ -518,6 +567,10 @@ export class RecoveryGameEngine {
           && this.repPeakTracking >= trackingThreshold;
         if (repQualified) {
           this.currentRepCount += 1;
+          const telemetry = this.getActionTelemetry(action);
+          if (telemetry) {
+            telemetry.repsCompleted = Math.max(telemetry.repsCompleted, this.currentRepCount);
+          }
         }
         this.upSeen = false;
         this.repPeakMatch = 0;
@@ -541,9 +594,20 @@ export class RecoveryGameEngine {
     const vitalsScore = this.computeVitalsScore();
     this.movementMatchSamples.push(movementMatch * 100);
     this.vitalsScoreSamples.push(vitalsScore * 100);
+    const telemetry = this.getActionTelemetry(action);
+    if (telemetry) {
+      telemetry.samples += 1;
+      telemetry.movementMatchSum += clamp(movementMatch, 0, 1) * 100;
+      telemetry.trackingSum += clamp(trackingConfidence, 0, 1) * 100;
+      telemetry.motionSyncSum += Number.isFinite(this.latestMotionSample?.syncScore)
+        ? clamp(this.latestMotionSample.syncScore, 0, 100)
+        : clamp(trackingConfidence, 0, 1) * 100;
+      telemetry.vitalsSum += clamp(vitalsScore, 0, 1) * 100;
+      telemetry.repsCompleted = Math.max(telemetry.repsCompleted, this.currentRepCount);
+    }
 
     this.progressScore = this.computeProgressScore(movementMatch, vitalsScore);
-    this.emitProgress(this.latestMotionSample, movementMatch, vitalsScore);
+    this.emitProgress(this.latestMotionSample, movementMatch, vitalsScore, trackingConfidence);
     this.drawOverlay(sample, false, this.latestMotionSample);
 
     this.rafId = requestAnimationFrame(this.tick);
@@ -579,7 +643,7 @@ export class RecoveryGameEngine {
     });
   }
 
-  emitProgress(motionSample, movementMatch = 0, vitalsScore = 0.5) {
+  emitProgress(motionSample, movementMatch = 0, vitalsScore = 0.5, trackingConfidence = null) {
     const action = this.actions[this.currentActionIndex];
     this.onProgress?.({
       score: this.progressScore,
@@ -595,7 +659,9 @@ export class RecoveryGameEngine {
       motionForearmRad: Number.isFinite(motionSample?.forearmRad) ? motionSample.forearmRad : null,
       movementMatchScore: clamp(movementMatch, 0, 1) * 100,
       vitalsScore: clamp(vitalsScore, 0, 1) * 100,
-      requiredMatchScore: this.getRepMatchThreshold() * 100
+      requiredMatchScore: this.getRepMatchThreshold() * 100,
+      trackingConfidence: Number.isFinite(trackingConfidence) ? trackingConfidence * 100 : null,
+      requiredTrackingScore: this.getTrackingThreshold() * 100
     });
   }
 

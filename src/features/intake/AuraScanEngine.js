@@ -2232,18 +2232,47 @@ function loadScriptOnce(src) {
     const existing = [...document.getElementsByTagName("script")]
       .find((script) => script.src === absoluteSrc);
     if (existing) {
-      resolve(existing);
-      return;
+      const state = existing.dataset?.loadState || "";
+      if (state === "loaded") {
+        resolve(existing);
+        return;
+      }
+      if (state === "error") {
+        existing.remove();
+      } else {
+        const cleanup = () => {
+          existing.removeEventListener("load", handleLoad);
+          existing.removeEventListener("error", handleError);
+        };
+        const handleLoad = () => {
+          cleanup();
+          existing.dataset.loadState = "loaded";
+          resolve(existing);
+        };
+        const handleError = () => {
+          cleanup();
+          existing.dataset.loadState = "error";
+          scriptLoadCache.delete(absoluteSrc);
+          reject(new Error(`Failed to load script: ${src}`));
+        };
+        existing.addEventListener("load", handleLoad, { once: true });
+        existing.addEventListener("error", handleError, { once: true });
+        return;
+      }
     }
 
     const script = document.createElement("script");
     script.src = absoluteSrc;
     script.async = false;
+    script.dataset.loadState = "loading";
     script.onload = () => {
+      script.dataset.loadState = "loaded";
       resolve(script);
     };
     script.onerror = () => {
+      script.dataset.loadState = "error";
       scriptLoadCache.delete(absoluteSrc);
+      script.remove();
       reject(new Error(`Failed to load script: ${src}`));
     };
     document.head.appendChild(script);

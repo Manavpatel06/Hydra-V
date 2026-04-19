@@ -23,7 +23,8 @@ import { getGuideResourceCatalog } from "./src/features/game/ExercisePlanner.js"
 import { WearableVitalsBridge } from "./src/features/wearable/WearableVitalsBridge.js";
 
 const STORAGE_KEY = "hydrav_sessions_v1";
-const ATHLETE_ID = "athlete-default-001";
+const LAST_PATIENT_STORAGE_KEY = "hydrav_last_patient_id_v1";
+const LEGACY_PATIENT_ID = "ATHLETE-DEFAULT-001";
 
 const eventBus = new HydraEventBus(window);
 
@@ -109,6 +110,12 @@ const narrationManager = new NarrationManager({
 
 const elements = {
   appShell: byId("app-shell"),
+  patientEntryScreen: byId("patient-entry-screen"),
+  patientIdInput: byId("patient-id-input"),
+  patientLookupSummary: byId("patient-lookup-summary"),
+  patientLookupList: byId("patient-lookup-list"),
+  patientStartSession: byId("patient-start-session"),
+  heroPatientId: byId("hero-patient-id"),
   anatomyPanel: byId("anatomy-panel"),
   anatomyPanelTitle: byId("anatomy-panel-title"),
   anatomyPanelSubtitle: byId("anatomy-panel-subtitle"),
@@ -185,6 +192,8 @@ const elements = {
   summaryMotionSync: byId("summary-motion-sync"),
   summaryAnalysisText: byId("summary-analysis-text"),
   summaryLiveImpact: byId("summary-live-impact"),
+  patientHistorySummary: byId("patient-history-summary"),
+  patientHistoryList: byId("patient-history-list"),
   summaryPlayVoice: byId("summary-play-voice"),
   summaryRestart: byId("summary-restart"),
   recModelMode: byId("rec-model-mode"),
@@ -255,6 +264,8 @@ const state = {
   sessionContext: { athleteName: "Athlete", focusZone: "left shoulder" },
   protocolContext: { focusZone: "left shoulder", modality: "hybrid" },
   sessions: loadSessions(),
+  activePatientId: null,
+  patientSessions: [],
   recommendation: null,
   activeProtocol: defaultProtocol(),
   gardenSnapshot: null,
@@ -271,6 +282,7 @@ let lastAuraPanelUpdateAt = 0;
 let lastBiometricPanelUpdateAt = 0;
 let lastGameTrackerSyncAt = 0;
 let lastWorldStoryId = null;
+let lastGameRepMarker = "";
 
 const motionAdapter = DEFAULTS.game.useMirrorMotionAdapter
   ? new MirrorMotionAdapter()
@@ -357,8 +369,14 @@ const gameEngine = new RecoveryGameEngine({
 
     const stats = activeRecoveryWorld?.getBuildStats?.();
     const actionImpact = describeActionImpact(payload.actionId);
+    const movementFeedback = buildGameMovementFeedback(payload);
     const storyLine = stats?.story?.line ? ` ${stats.story.line}` : "";
-    const combinedImpact = `${actionImpact}${storyLine}`.trim();
+    const repMarker = `${payload.actionId || "none"}:${payload.repsDone || 0}`;
+    if ((payload.repsDone || 0) > 0 && repMarker !== lastGameRepMarker) {
+      lastGameRepMarker = repMarker;
+      appendWorldLog(`Clean rep ${payload.repsDone}/${payload.repsTarget} captured for ${payload.actionLabel || payload.actionId || "movement"}.`);
+    }
+    const combinedImpact = `${movementFeedback} ${actionImpact}${storyLine}`.trim();
     elements.gameImpactText.textContent = combinedImpact;
     elements.leftGameImpact.textContent = combinedImpact;
   },
@@ -387,6 +405,74 @@ function byId(id) {
   return element;
 }
 
+function normalizePatientId(value, fallback = "") {
+  const normalized = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^A-Z0-9_-]/g, "")
+    .slice(0, 32);
+  return normalized || fallback;
+}
+
+function cloneSerializable(value) {
+  if (value == null) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function loadLastPatientId() {
+  try {
+    return normalizePatientId(localStorage.getItem(LAST_PATIENT_STORAGE_KEY) || "");
+  } catch {
+    return "";
+  }
+}
+
+function persistLastPatientId(patientId) {
+  const normalized = normalizePatientId(patientId);
+  if (!normalized) {
+    return;
+  }
+  localStorage.setItem(LAST_PATIENT_STORAGE_KEY, normalized);
+}
+
+function normalizeStoredSession(session = {}) {
+  const protocol = session.protocol && typeof session.protocol === "object"
+    ? session.protocol
+    : defaultProtocol();
+
+  return {
+    id: typeof session.id === "string" && session.id ? session.id : (crypto.randomUUID?.() || `session-${Date.now()}`),
+    athleteId: normalizePatientId(session.athleteId || session.patientId || LEGACY_PATIENT_ID, LEGACY_PATIENT_ID),
+    createdAt: typeof session.createdAt === "string" && session.createdAt ? session.createdAt : new Date().toISOString(),
+    modality: session.modality || inferModality(protocol),
+    protocol,
+    outcomes: session.outcomes && typeof session.outcomes === "object" ? session.outcomes : {},
+    focusZone: typeof session.focusZone === "string" && session.focusZone ? session.focusZone : "left shoulder",
+    baselineMetrics: session.baselineMetrics ?? null,
+    postMetrics: session.postMetrics ?? null,
+    gameSummary: session.gameSummary ?? null
+  };
+}
+
+function getSessionsForPatient(patientId, sessions = state.sessions) {
+  const normalized = normalizePatientId(patientId);
+  if (!normalized) {
+    return [];
+  }
+  return sessions.filter((session) => normalizePatientId(session?.athleteId, LEGACY_PATIENT_ID) === normalized);
+}
+
+function getActivePatientSessions() {
+  return state.activePatientId ? getSessionsForPatient(state.activePatientId) : [];
+}
+
 function normalizeFrame(frame = {}) {
   return {
     timestampMs: Number.isFinite(frame.timestampMs) ? frame.timestampMs : performance.now(),
@@ -409,7 +495,7 @@ function loadSessions() {
       return [];
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map((session) => normalizeStoredSession(session)) : [];
   } catch {
     return [];
   }
@@ -495,6 +581,39 @@ function describeActionImpact(actionId) {
   return map[actionId] || "Each rep powers the hero and rebuilds the recovery world.";
 }
 
+function describeMovementFix(actionId) {
+  const tips = {
+    raise: "Lift the working wrist higher than shoulder level, then return with control.",
+    cross: "Reach further across the midline before coming back to neutral.",
+    "elbow-drive": "Drive the elbow farther back and pause before resetting.",
+    march: "Bring the knee higher toward hip level to lock the rep.",
+    "side-step": "Step wider to the side, then bring the foot back under control.",
+    hinge: "Hinge the torso farther forward from the hips, then return tall.",
+    "mini-squat": "Drop slightly deeper into the squat and finish upright.",
+    "step-lift": "Lift the stepping foot higher before placing it back down softly.",
+    extension: "Extend the lower leg farther forward before returning."
+  };
+  return tips[actionId] || "Match the preview closely, then return to the start position to count the rep.";
+}
+
+function buildGameMovementFeedback(payload = {}) {
+  const actionId = payload.actionId;
+  const matchScore = Number(payload.movementMatchScore);
+  const requiredMatch = Number(payload.requiredMatchScore);
+  const tracking = Number(payload.trackingConfidence);
+  const requiredTracking = Number(payload.requiredTrackingScore);
+
+  if (Number.isFinite(tracking) && Number.isFinite(requiredTracking) && tracking < requiredTracking) {
+    return "Keep the full working side visible in frame so the rep can be validated.";
+  }
+
+  if (Number.isFinite(matchScore) && Number.isFinite(requiredMatch) && matchScore >= requiredMatch) {
+    return "Clean form matched. Return to the start position to register the rep.";
+  }
+
+  return describeMovementFix(actionId);
+}
+
 function appendWorldLog(message) {
   const li = document.createElement("li");
   li.textContent = message;
@@ -513,6 +632,7 @@ function resetWorldUi() {
   elements.worldBuildPeak.textContent = "0 / 1";
   elements.worldActionLog.innerHTML = "";
   lastWorldStoryId = null;
+  lastGameRepMarker = "";
 }
 
 function updateWorldBuildUi() {
@@ -634,6 +754,151 @@ function asDelta(value, suffix = "") {
   }
   const sign = value > 0 ? "+" : "";
   return `${sign}${round(value, 2)}${suffix}`;
+}
+
+function formatSessionTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown time";
+  }
+  return date.toLocaleString();
+}
+
+function summarizePatientSession(session) {
+  const parts = [];
+  const score = recoveryScore(session);
+  const symmetryGain = Number(session?.outcomes?.symmetryGain);
+  const hrvDelta = Number(session?.outcomes?.hrvDelta);
+  const motionMatch = Number(session?.gameSummary?.movementMatchAvg);
+
+  if (Number.isFinite(score)) {
+    parts.push(`Score ${score}`);
+  }
+  if (Number.isFinite(symmetryGain)) {
+    parts.push(`Sym ${asDelta(symmetryGain, "%")}`);
+  }
+  if (Number.isFinite(hrvDelta)) {
+    parts.push(`HRV ${asDelta(hrvDelta, " ms")}`);
+  }
+  if (Number.isFinite(motionMatch)) {
+    parts.push(`Move ${Math.round(motionMatch)}%`);
+  }
+
+  return parts.length ? parts.join(" | ") : "Session recorded";
+}
+
+function buildPatientContinuityState(patientId = state.activePatientId, currentRecord = null) {
+  const normalized = normalizePatientId(patientId);
+  if (!normalized) {
+    return {
+      patientId: "",
+      sessions: [],
+      priorSessions: [],
+      latestPrior: null,
+      summary: "Enter a patient ID to retrieve previous sessions before starting.",
+      items: []
+    };
+  }
+
+  const sessions = getSessionsForPatient(normalized);
+  const priorSessions = currentRecord
+    ? sessions.filter((session) => session.id !== currentRecord.id)
+    : sessions;
+  const latestPrior = priorSessions.at(-1) || null;
+
+  let summary = "";
+  if (!priorSessions.length) {
+    summary = currentRecord
+      ? `First recorded session stored for ${normalized}. Future visits will compare against today's baseline.`
+      : `No prior sessions found for ${normalized}. Starting a new continuity baseline.`;
+  } else {
+    const plural = priorSessions.length === 1 ? "" : "s";
+    summary = `${priorSessions.length} prior session${plural} found for ${normalized}. Last visit ${formatSessionTimestamp(latestPrior.createdAt)}.`;
+  }
+
+  const items = [];
+  if (currentRecord) {
+    items.push(`Today | ${summarizePatientSession(currentRecord)}`);
+  }
+
+  const historyRows = (currentRecord ? priorSessions : sessions).slice(-3).reverse();
+  historyRows.forEach((session) => {
+    items.push(`${formatSessionTimestamp(session.createdAt)} | ${summarizePatientSession(session)}`);
+  });
+
+  if (!items.length) {
+    items.push(currentRecord
+      ? "Today's session becomes the first continuity baseline."
+      : "No saved sessions yet for this patient.");
+  }
+
+  return {
+    patientId: normalized,
+    sessions,
+    priorSessions,
+    latestPrior,
+    summary,
+    items
+  };
+}
+
+function renderTextList(element, items = []) {
+  element.innerHTML = "";
+  items.forEach((line) => {
+    const li = document.createElement("li");
+    li.textContent = line;
+    element.appendChild(li);
+  });
+}
+
+function renderPatientLookupPreview(patientId = elements.patientIdInput.value) {
+  const normalized = normalizePatientId(patientId);
+  elements.patientStartSession.disabled = !normalized;
+
+  if (!normalized) {
+    elements.patientLookupSummary.textContent = "Enter a patient ID to retrieve previous sessions before starting.";
+    elements.patientLookupList.innerHTML = "";
+    return;
+  }
+
+  const continuity = buildPatientContinuityState(normalized);
+  elements.patientLookupSummary.textContent = continuity.summary;
+  renderTextList(elements.patientLookupList, continuity.items);
+}
+
+function renderPatientHistory(currentRecord = null) {
+  const continuity = buildPatientContinuityState(state.activePatientId, currentRecord);
+  elements.patientHistorySummary.textContent = continuity.summary;
+  renderTextList(elements.patientHistoryList, continuity.items);
+  return continuity;
+}
+
+function showPatientEntryScreen() {
+  elements.patientEntryScreen.classList.remove("hidden");
+  elements.appShell.classList.add("hidden");
+}
+
+function showAppShell() {
+  elements.patientEntryScreen.classList.add("hidden");
+  elements.appShell.classList.remove("hidden");
+  scheduleOverlayResize();
+}
+
+function activatePatient(patientId) {
+  const normalized = normalizePatientId(patientId);
+  if (!normalized) {
+    return "";
+  }
+
+  state.activePatientId = normalized;
+  state.patientSessions = getSessionsForPatient(normalized);
+  state.sessionContext = { ...state.sessionContext, athleteName: normalized };
+  eventBus.emit(EVENTS.SESSION_CONTEXT, { ...state.sessionContext });
+  elements.heroPatientId.textContent = normalized;
+  elements.patientIdInput.value = normalized;
+  persistLastPatientId(normalized);
+  hydrateAdaptiveState();
+  return normalized;
 }
 
 function safeDelta(after, before) {
@@ -780,11 +1045,14 @@ function renderGarden() {
 }
 
 function hydrateAdaptiveState() {
-  state.recommendation = recommendProtocol(state.sessions, isWebGpuAvailable());
+  state.patientSessions = getActivePatientSessions();
+  state.recommendation = recommendProtocol(state.patientSessions, isWebGpuAvailable());
   state.activeProtocol = { ...state.recommendation.protocol };
-  state.gardenSnapshot = buildGardenSnapshot(state.sessions);
+  state.gardenSnapshot = buildGardenSnapshot(state.patientSessions);
   renderRecommendation();
   renderGarden();
+  elements.heroPatientId.textContent = state.activePatientId || "--";
+  renderPatientLookupPreview(elements.patientIdInput.value || state.activePatientId || "");
 }
 
 let overlayResizeRafId = null;
@@ -837,6 +1105,7 @@ async function ensureCameraStarted() {
 }
 
 function stopCamera() {
+  const wasRunning = state.cameraRunning;
   auraScanEngine.stopCamera();
   thermalEngine.stopScan();
   thermalEngine.clearOverlay();
@@ -848,7 +1117,9 @@ function stopCamera() {
   state.scanMode = null;
   state.gameRunning = false;
   setScanTimer(clamp(Number(elements.scanDurationInput.value) || 60, 20, 180));
-  log("Camera stopped.");
+  if (wasRunning) {
+    log("Camera stopped.");
+  }
 }
 
 function resetIntakeStageValues() {
@@ -960,9 +1231,10 @@ async function startIntakeScanFlow() {
     state.postMetrics = null;
     state.thermalResult = null;
     state.gameResult = null;
+    state.lastSummaryRecord = null;
     resetIntakeStageValues();
     startAuraScan("baseline", durationSec);
-    log(`Started intake scan for ${durationSec}s.`);
+    log(`Started intake scan for ${durationSec}s${state.activePatientId ? ` for ${state.activePatientId}` : ""}.`);
   } catch (error) {
     log(`Failed to start intake scan: ${error.message}`, "warn");
   }
@@ -1152,26 +1424,122 @@ function deriveSessionOutcomes(baseline, post, gameSummary) {
 function createSessionRecord(outcomes) {
   return {
     id: crypto.randomUUID(),
-    athleteId: ATHLETE_ID,
+    athleteId: state.activePatientId || LEGACY_PATIENT_ID,
     createdAt: new Date().toISOString(),
     modality: inferModality(state.activeProtocol),
-    protocol: { ...state.activeProtocol },
+    protocol: cloneSerializable(state.activeProtocol),
     outcomes,
-    focusZone: state.sessionContext.focusZone
+    focusZone: state.sessionContext.focusZone,
+    baselineMetrics: cloneSerializable(state.baselineMetrics),
+    postMetrics: cloneSerializable(state.postMetrics),
+    gameSummary: cloneSerializable(state.gameResult)
   };
 }
 
-function buildSummaryVoiceText(sessionRecord, nextRecommendation) {
-  const score = recoveryScore(sessionRecord);
-  const expected = Number.isFinite(nextRecommendation?.expectedImprovement)
-    ? ` Predicted next gain ${round(nextRecommendation.expectedImprovement, 2)}.`
-    : "";
-  return `Session complete. Analysis is ready.${score ? ` Recovery score ${score}.` : ""}${expected}`;
+function actionQualityScore(action = {}) {
+  const match = clamp(Number(action.avgMovementMatch || 0) / 100, 0, 1);
+  const tracking = clamp(Number(action.avgTrackingConfidence || 0) / 100, 0, 1);
+  const sync = Number.isFinite(Number(action.avgMotionSync))
+    ? clamp(Number(action.avgMotionSync) / 100, 0, 1)
+    : tracking;
+  const completion = clamp((Number(action.repsCompleted) || 0) / Math.max(Number(action.repsTarget) || 1, 1), 0, 1);
+  const completionScore = action.skipped ? completion * 0.4 : (action.completed ? 1 : completion);
+  return match * 0.46 + tracking * 0.22 + sync * 0.18 + completionScore * 0.14;
 }
 
-function buildReaAiAnalysis(outcomes, baseline, post, recommendation, gameSummary) {
+function getMovementCoaching(gameSummary = {}) {
+  const breakdown = Array.isArray(gameSummary?.actionBreakdown) ? [...gameSummary.actionBreakdown] : [];
+  if (!breakdown.length) {
+    return {
+      bestAction: null,
+      focusAction: null,
+      bestLine: "",
+      focusLine: "",
+      voiceBest: "",
+      voiceFocus: ""
+    };
+  }
+
+  breakdown.sort((a, b) => actionQualityScore(b) - actionQualityScore(a));
+  const bestAction = breakdown[0] || null;
+  const focusAction = breakdown.find((item) => item.id !== bestAction?.id) || breakdown.at(-1) || null;
+  const bestTracking = Number(bestAction?.avgTrackingConfidence);
+  const bestMatch = Number(bestAction?.avgMovementMatch);
+  const focusTracking = Number(focusAction?.avgTrackingConfidence);
+  const focusMatch = Number(focusAction?.avgMovementMatch);
+  const focusNeedsTracking = Number.isFinite(focusTracking)
+    && Number.isFinite(Number(focusAction?.requiredTrackingScore))
+    && focusTracking < Number(focusAction.requiredTrackingScore);
+  const bestLine = bestAction
+    ? `${bestAction.label} performed best, averaging ${Math.round(bestMatch || 0)}% movement match with ${Math.round(bestTracking || 0)}% tracking confidence.`
+    : "";
+  const focusLine = focusAction
+    ? `${focusAction.label} needs the most work. ${focusNeedsTracking ? "Keep the full working side visible in frame. " : ""}${describeMovementFix(focusAction.id)}`
+    : "";
+  const voiceBest = bestAction
+    ? `${bestAction.label} was your strongest movement, with ${Math.round(bestMatch || 0)} percent match quality.`
+    : "";
+  const voiceFocus = focusAction
+    ? `${focusAction.label} needs more work. ${focusNeedsTracking ? "Keep the working side fully visible. " : ""}${describeMovementFix(focusAction.id)}`
+    : "";
+
+  return {
+    bestAction,
+    focusAction,
+    bestLine,
+    focusLine,
+    voiceBest,
+    voiceFocus
+  };
+}
+
+function buildSummaryVoiceText(sessionRecord, nextRecommendation, continuity = buildPatientContinuityState(sessionRecord?.athleteId, sessionRecord)) {
+  const score = recoveryScore(sessionRecord);
+  const outcomes = sessionRecord?.outcomes || {};
+  const movement = getMovementCoaching(sessionRecord?.gameSummary || {});
+  const lines = [
+    `Session complete for patient ${sessionRecord.athleteId}.`,
+    "Here is the recovery analysis."
+  ];
+
+  if (Number.isFinite(score)) {
+    lines.push(`Overall recovery score ${score}.`);
+  }
+  if (movement.voiceBest) {
+    lines.push(movement.voiceBest);
+  }
+  if (movement.voiceFocus) {
+    lines.push(movement.voiceFocus);
+  }
+  if (Number.isFinite(outcomes.symmetryGain)) {
+    lines.push(`Symmetry ${outcomes.symmetryGain >= 0 ? "improved" : "decreased"} by ${Math.abs(outcomes.symmetryGain).toFixed(1)} percent.`);
+  }
+  if (Number.isFinite(outcomes.hrvDelta)) {
+    lines.push(`Heart rate variability moved ${outcomes.hrvDelta >= 0 ? "up" : "down"} ${Math.abs(outcomes.hrvDelta).toFixed(1)} milliseconds from intake.`);
+  }
+  if (continuity?.latestPrior) {
+    const previousScore = recoveryScore(continuity.latestPrior);
+    const scoreDelta = safeDelta(score, previousScore);
+    if (Number.isFinite(scoreDelta)) {
+      lines.push(`Compared with the last visit, recovery score ${scoreDelta >= 0 ? "improved" : "fell"} by ${Math.abs(scoreDelta).toFixed(1)} points.`);
+    }
+  } else if (continuity?.patientId) {
+    lines.push(`This session is now the baseline record for ${continuity.patientId}.`);
+  }
+  if (Number.isFinite(nextRecommendation?.expectedImprovement) && Number.isFinite(nextRecommendation?.confidence)) {
+    lines.push(`Next session is predicted to improve by ${round(nextRecommendation.expectedImprovement, 2)}, with ${Math.round(nextRecommendation.confidence * 100)} percent confidence.`);
+  }
+
+  return lines.join(" ").replace(/\s+/g, " ").trim().slice(0, 1350);
+}
+
+function buildReaAiAnalysis(sessionRecord, baseline, post, recommendation, continuity) {
+  const outcomes = sessionRecord?.outcomes || {};
+  const gameSummary = sessionRecord?.gameSummary || {};
   const lines = [];
   const focus = state.sessionContext.focusZone;
+  const currentScore = recoveryScore(sessionRecord);
+  const movement = getMovementCoaching(gameSummary);
 
   if (Number.isFinite(outcomes.symmetryGain)) {
     const direction = outcomes.symmetryGain >= 0 ? "improved" : "regressed";
@@ -1193,6 +1561,30 @@ function buildReaAiAnalysis(outcomes, baseline, post, recommendation, gameSummar
   if (Number.isFinite(gameSummary?.vitalScoreAvg)) {
     lines.push(`Vital stability averaged ${Math.round(gameSummary.vitalScoreAvg)}% during active protocol.`);
   }
+  if (movement.bestLine) {
+    lines.push(movement.bestLine);
+  }
+  if (movement.focusLine) {
+    lines.push(movement.focusLine);
+  }
+  if (Number.isFinite(currentScore)) {
+    lines.push(`Composite recovery score closed at ${currentScore}.`);
+  }
+
+  if (continuity?.latestPrior) {
+    const previousScore = recoveryScore(continuity.latestPrior);
+    const scoreDelta = safeDelta(currentScore, previousScore);
+    const hrvResponseShift = safeDelta(outcomes.hrvDelta, continuity.latestPrior?.outcomes?.hrvDelta);
+    lines.push(`Patient continuity includes ${continuity.priorSessions.length} prior sessions, with the latest visit on ${formatSessionTimestamp(continuity.latestPrior.createdAt)}.`);
+    if (Number.isFinite(scoreDelta)) {
+      lines.push(`Recovery score ${scoreDelta >= 0 ? "outperformed" : "trailed"} the last visit by ${Math.abs(scoreDelta).toFixed(1)} points.`);
+    }
+    if (Number.isFinite(hrvResponseShift)) {
+      lines.push(`HRV response was ${hrvResponseShift >= 0 ? "stronger" : "lower"} than the last visit by ${Math.abs(hrvResponseShift).toFixed(1)} ms.`);
+    }
+  } else if (continuity?.patientId) {
+    lines.push(`This is the first recorded continuity baseline for patient ${continuity.patientId}.`);
+  }
 
   if (Number.isFinite(recommendation?.expectedImprovement) && Number.isFinite(recommendation?.confidence)) {
     lines.push(`Next-session expected gain is ${recommendation.expectedImprovement.toFixed(2)} with ${Math.round(recommendation.confidence * 100)}% confidence.`);
@@ -1207,6 +1599,7 @@ function buildReaAiAnalysis(outcomes, baseline, post, recommendation, gameSummar
 
 function buildLiveImpactRows(outcomes, gameSummary) {
   const rows = [];
+  const movement = getMovementCoaching(gameSummary);
   rows.push(`Focus Zone: ${state.sessionContext.focusZone}`);
   rows.push(`Actions Completed: ${gameSummary?.actionsCompleted ?? 0}/${gameSummary?.actionsTotal ?? 0}`);
   rows.push(`Game Score: ${Math.round(gameSummary?.score ?? 0)}%`);
@@ -1219,11 +1612,18 @@ function buildLiveImpactRows(outcomes, gameSummary) {
   if (Number.isFinite(gameSummary?.vitalScoreAvg)) {
     rows.push(`Vitals Stability Avg: ${Math.round(gameSummary.vitalScoreAvg)}%`);
   }
+  if (movement.bestAction) {
+    rows.push(`Best Movement: ${movement.bestAction.label}`);
+  }
+  if (movement.focusAction) {
+    rows.push(`Needs More Work: ${movement.focusAction.label}`);
+  }
   rows.push(`ROM Gain Estimate: ${Number(outcomes?.romGain ?? 0).toFixed(2)} pts`);
   return rows;
 }
 
 function renderSummary(outcomes, sessionRecord) {
+  const continuity = renderPatientHistory(sessionRecord);
   elements.summaryStatus.textContent = `Session saved (${new Date(sessionRecord.createdAt).toLocaleString()}).`;
   elements.summaryHrvDelta.textContent = asDelta(outcomes.hrvDelta, " ms");
   elements.summarySymmetryGain.textContent = asDelta(outcomes.symmetryGain, " %");
@@ -1233,11 +1633,11 @@ function renderSummary(outcomes, sessionRecord) {
   elements.summaryGameScore.textContent = Number.isFinite(state.gameResult?.score) ? `${Math.round(state.gameResult.score)}%` : "--";
   elements.summaryMotionSync.textContent = Number.isFinite(outcomes.motionSync) ? `${Math.round(outcomes.motionSync)}%` : "--";
   elements.summaryAnalysisText.textContent = buildReaAiAnalysis(
-    outcomes,
+    sessionRecord,
     state.baselineMetrics,
     state.postMetrics,
     state.recommendation,
-    state.gameResult
+    continuity
   );
 
   elements.summaryLiveImpact.innerHTML = "";
@@ -1251,6 +1651,7 @@ function renderSummary(outcomes, sessionRecord) {
 async function finalizeSession() {
   const outcomes = deriveSessionOutcomes(state.baselineMetrics, state.postMetrics, state.gameResult);
   const record = createSessionRecord(outcomes);
+  const continuity = buildPatientContinuityState(record.athleteId, record);
   state.sessions.push(record);
   persistSessions();
   state.lastSummaryRecord = record;
@@ -1258,12 +1659,14 @@ async function finalizeSession() {
   renderSummary(outcomes, record);
   setStage("summary");
   if (state.voiceEnabled) {
-    await narrationManager.speak(buildSummaryVoiceText(record, state.recommendation), { source: "summary-auto" });
+    await narrationManager.speak(buildSummaryVoiceText(record, state.recommendation, continuity), { source: "summary-auto" });
   }
   log("Session completed and persisted with updated analysis.");
 }
 
-function resetForNewSession() {
+function resetForNewSession(options = {}) {
+  const { returnToLanding = true } = options;
+  stopCamera();
   state.scanMode = null;
   state.intakeReady = false;
   state.baselineMetrics = null;
@@ -1271,6 +1674,7 @@ function resetForNewSession() {
   state.thermalResult = null;
   state.gameRunning = false;
   state.gameResult = null;
+  state.lastSummaryRecord = null;
   elements.gameMotionSync.textContent = "-- %";
   elements.gameImpactText.textContent = "Each rep places blocks in your recovery world.";
   elements.gameNextUp.textContent = "--";
@@ -1288,9 +1692,37 @@ function resetForNewSession() {
   splineRecoveryWorld.stop();
   resetWorldUi();
   neuralHandshakeEngine.stop();
+  cardiacEngine.stop();
+  neuroEngine.stopSession();
   thermalEngine.clearOverlay();
   setStage("intake");
-  log("Ready for new session.");
+  renderPatientHistory(null);
+  if (returnToLanding) {
+    elements.patientIdInput.value = state.activePatientId || elements.patientIdInput.value;
+    renderPatientLookupPreview(elements.patientIdInput.value);
+    showPatientEntryScreen();
+  } else {
+    showAppShell();
+  }
+  log(returnToLanding ? "Ready for next patient session." : "Ready for new session.");
+}
+
+async function startPatientSessionFromEntry() {
+  const patientId = normalizePatientId(elements.patientIdInput.value);
+  elements.patientIdInput.value = patientId;
+  renderPatientLookupPreview(patientId);
+
+  if (!patientId) {
+    elements.patientLookupSummary.textContent = "Enter a valid patient ID to start the recovery session.";
+    elements.patientIdInput.focus();
+    log("Patient ID is required before starting the session.", "warn");
+    return;
+  }
+
+  activatePatient(patientId);
+  resetForNewSession({ returnToLanding: false });
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  await startIntakeScanFlow();
 }
 
 async function playSummaryVoice() {
@@ -1298,7 +1730,8 @@ async function playSummaryVoice() {
     log("No summary record available yet.", "warn");
     return;
   }
-  await narrationManager.speak(buildSummaryVoiceText(state.lastSummaryRecord, state.recommendation), { source: "summary-manual" });
+  const continuity = buildPatientContinuityState(state.lastSummaryRecord.athleteId, state.lastSummaryRecord);
+  await narrationManager.speak(buildSummaryVoiceText(state.lastSummaryRecord, state.recommendation, continuity), { source: "summary-manual" });
 }
 
 function bindUi() {
@@ -1317,6 +1750,22 @@ function bindUi() {
   elements.mqttApiBaseUrlInput.value = DEFAULTS.cardiac.mqtt.apiBaseUrl;
   elements.mqttTopicInput.value = DEFAULTS.cardiac.mqtt.topic;
   elements.mqttDeviceMacInput.value = DEFAULTS.cardiac.mqtt.mac;
+  elements.patientIdInput.addEventListener("input", () => {
+    renderPatientLookupPreview(elements.patientIdInput.value);
+  });
+  elements.patientIdInput.addEventListener("blur", () => {
+    elements.patientIdInput.value = normalizePatientId(elements.patientIdInput.value);
+    renderPatientLookupPreview(elements.patientIdInput.value);
+  });
+  elements.patientIdInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void startPatientSessionFromEntry();
+    }
+  });
+  elements.patientStartSession.addEventListener("click", () => {
+    void startPatientSessionFromEntry();
+  });
 
   elements.startCameraButton.addEventListener("click", () => { void ensureCameraStarted(); });
   elements.stopCameraButton.addEventListener("click", () => { stopCamera(); });
@@ -1788,6 +2237,7 @@ function initializeBridge() {
     getSnapshot() {
       return {
         stage: state.stage,
+        activePatientId: state.activePatientId,
         scanMode: state.scanMode,
         baselineMetrics: state.baselineMetrics,
         postMetrics: state.postMetrics,
@@ -1797,10 +2247,17 @@ function initializeBridge() {
         activeExercisePlan: gameEngine.getActiveCurriculum?.() || null,
         recommendation: state.recommendation,
         gardenSnapshot: state.gardenSnapshot,
+        patientSessions: state.patientSessions,
         sessions: state.sessions
       };
     },
-    async startFlow() { await startIntakeScanFlow(); },
+    async startFlow() {
+      if (!state.activePatientId && normalizePatientId(elements.patientIdInput.value)) {
+        await startPatientSessionFromEntry();
+        return;
+      }
+      await startIntakeScanFlow();
+    },
     async nextToGame() { await beginGameFlow(); },
     skipCurrentWorkout() { return gameEngine.skipCurrentAction("bridge"); }
   };
@@ -1812,6 +2269,7 @@ async function bootstrap() {
   initializeBridge();
   hydrateAdaptiveState();
   setStage("intake");
+  showPatientEntryScreen();
   cardiacEngine.emitStatus();
   setPill(elements.auraStatusPill, "Idle", "idle");
   setPill(elements.thermalStatusPill, "Idle", "idle");
@@ -1829,10 +2287,12 @@ async function bootstrap() {
   } else {
     void wearableBridge.tryAutoReconnect();
   }
-  try {
-    await startIntakeScanFlow();
-  } catch (error) {
-    log(`Auto intake start failed: ${error.message}`, "warn");
+  const lastPatientId = loadLastPatientId();
+  if (lastPatientId) {
+    elements.patientIdInput.value = lastPatientId;
+    renderPatientLookupPreview(lastPatientId);
+  } else {
+    renderPatientLookupPreview("");
   }
   try {
     await ensureHydrawavReady("startup");

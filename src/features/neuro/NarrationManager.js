@@ -1,4 +1,5 @@
-﻿import { EVENTS } from "../../core/events.js";
+import { DEFAULTS } from "../../config/defaults.js";
+import { EVENTS } from "../../core/events.js";
 
 export class NarrationManager {
   constructor({ eventBus, elevenLabsClient }) {
@@ -46,14 +47,14 @@ export class NarrationManager {
         const audioBlob = await this.elevenLabsClient.synthesize(text);
         const audioUrl = URL.createObjectURL(audioBlob);
         this.currentObjectUrl = audioUrl;
-        await this.playAudio(audioUrl);
+        await this.playAudio(audioUrl, metadata);
         this.eventBus.emit(EVENTS.VOICE_NOTE_READY, {
           text,
           metadata,
           delivered: true
         });
       } catch (error) {
-        await this.speakFallback(text);
+        await this.speakFallback(text, metadata);
         this.eventBus.emit(EVENTS.WARNING, {
           scope: "narration",
           message: `${error.message}. Switched to browser speech fallback.`
@@ -74,16 +75,31 @@ export class NarrationManager {
     return this.queue;
   }
 
-  playAudio(audioUrl) {
+  resolvePlaybackRate(metadata = {}) {
+    if (Number.isFinite(metadata.playbackRate)) {
+      return metadata.playbackRate;
+    }
+    if (metadata.source === "summary-auto" || metadata.source === "summary-manual") {
+      return DEFAULTS.voice.summaryPlaybackRate;
+    }
+    return DEFAULTS.voice.playbackRate;
+  }
+
+  playAudio(audioUrl, metadata = {}) {
     return new Promise((resolve, reject) => {
+      const playbackRate = this.resolvePlaybackRate(metadata);
       this.audio.onended = () => resolve();
       this.audio.onerror = () => reject(new Error("Unable to play synthesized narration audio."));
       this.audio.src = audioUrl;
+      this.audio.playbackRate = playbackRate;
+      if ("preservesPitch" in this.audio) {
+        this.audio.preservesPitch = true;
+      }
       this.audio.play().catch((error) => reject(error));
     });
   }
 
-  speakFallback(text) {
+  speakFallback(text, metadata = {}) {
     return new Promise((resolve, reject) => {
       if (!("speechSynthesis" in window) || !window.SpeechSynthesisUtterance) {
         reject(new Error("Browser speech synthesis is not available."));
@@ -91,7 +107,7 @@ export class NarrationManager {
       }
 
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.98;
+      utterance.rate = this.resolvePlaybackRate(metadata);
       utterance.pitch = 1;
       utterance.onend = () => {
         this.eventBus.emit(EVENTS.VOICE_NOTE_READY, { text, delivered: true, fallback: true });
