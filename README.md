@@ -286,12 +286,12 @@ THERMAL_USE_PYTHON_ANALYTICS=true
 
 ---
 
-## 📡 Architecture
+##  Architecture
 
 | Layer         | Tech                         |
 | ------------- | ---------------------------- |
 | Frontend      | React + Three.js + MediaPipe |
-| Audio         | Web Audio API                |
+| Audio         | Web Audio API + ElevenLabs               |
 | Device Sync   | Web Bluetooth                |
 | AI            | WebGPU                       |
 | Backend       | Node.js                      |
@@ -304,14 +304,15 @@ THERMAL_USE_PYTHON_ANALYTICS=true
 * 100% local processing
 * No biometric data leaves device
 * No cloud inference
-
+* External API usage limited to voice generation (ElevenLabs)
 ---
 
 ##  System Loop
-
-1. **Scan (Know)** → physiological baseline
-2. **Prime + Sync (Act)** → optimized stimulation
-3. **Measure + Learn (Learn)** → adaptive improvement
+1. Scan → capture physiological baseline (HRV, symmetry, CNS signals)
+2. Prime & Synchronize → neural priming + heartbeat-synced stimulation
+3. Adapt & Deliver → personalized protocol across thermal, light, and resonance
+4. Measure Response → post-session changes in HRV, symmetry, CNS
+5. Optimize Next Session → Updates protocol parameters for efficiency
 
 ---
 
