@@ -283,6 +283,15 @@ let lastBiometricPanelUpdateAt = 0;
 let lastGameTrackerSyncAt = 0;
 let lastWorldStoryId = null;
 let lastGameRepMarker = "";
+let gameHudAnimationRafId = null;
+const gameHudDisplay = {
+  score: 0,
+  targetScore: 0,
+  motionSync: null,
+  targetMotionSync: null,
+  progress: 0,
+  targetProgress: 0
+};
 
 const motionAdapter = DEFAULTS.game.useMirrorMotionAdapter
   ? new MirrorMotionAdapter()
@@ -349,21 +358,17 @@ const gameEngine = new RecoveryGameEngine({
       ? `Guided game running (${payload.side} ${payload.zone}${difficultyTag}).`
       : "Game stopped.";
     if (payload.status !== "running") {
-      elements.gameMotionSync.textContent = "-- %";
+      stopGameHudAnimation(true);
     }
     if (payload.status === "running" && payload.plannerRationale) {
       appendWorldLog(`Planner: ${payload.plannerRationale}`);
     }
   },
   onProgress: (payload) => {
-    elements.gameScore.textContent = `${Math.round(payload.score)}%`;
+    setGameHudTargets(payload);
     elements.gameReps.textContent = `${payload.repsDone} / ${payload.repsTarget}`;
     elements.leftGameReps.textContent = `${payload.repsDone} / ${payload.repsTarget}`;
     elements.gameActionsCount.textContent = `${payload.actionsCompleted} / ${payload.actionsTotal}`;
-    elements.gameMotionSync.textContent = Number.isFinite(payload.motionSyncScore)
-      ? `${Math.round(payload.motionSyncScore)}%`
-      : "-- %";
-    elements.gameProgressFill.style.width = `${payload.score}%`;
     activeRecoveryWorld?.update(payload);
     updateWorldBuildUi();
 
@@ -623,7 +628,84 @@ function appendWorldLog(message) {
   }
 }
 
+function renderGameHudDisplay() {
+  elements.gameScore.textContent = `${Math.round(gameHudDisplay.score)}%`;
+  elements.gameProgressFill.style.width = `${clamp(gameHudDisplay.progress, 0, 100)}%`;
+  elements.gameMotionSync.textContent = Number.isFinite(gameHudDisplay.motionSync)
+    ? `${Math.round(gameHudDisplay.motionSync)}%`
+    : "-- %";
+}
+
+function stopGameHudAnimation(reset = false) {
+  if (gameHudAnimationRafId) {
+    cancelAnimationFrame(gameHudAnimationRafId);
+    gameHudAnimationRafId = null;
+  }
+
+  if (reset) {
+    gameHudDisplay.score = 0;
+    gameHudDisplay.targetScore = 0;
+    gameHudDisplay.motionSync = null;
+    gameHudDisplay.targetMotionSync = null;
+    gameHudDisplay.progress = 0;
+    gameHudDisplay.targetProgress = 0;
+    renderGameHudDisplay();
+  }
+}
+
+function stepGameHudAnimation() {
+  gameHudAnimationRafId = null;
+
+  const scoreDelta = gameHudDisplay.targetScore - gameHudDisplay.score;
+  const progressDelta = gameHudDisplay.targetProgress - gameHudDisplay.progress;
+  gameHudDisplay.score += scoreDelta * 0.22;
+  gameHudDisplay.progress += progressDelta * 0.22;
+
+  if (Number.isFinite(gameHudDisplay.targetMotionSync)) {
+    const current = Number.isFinite(gameHudDisplay.motionSync)
+      ? gameHudDisplay.motionSync
+      : gameHudDisplay.targetMotionSync;
+    gameHudDisplay.motionSync = current + ((gameHudDisplay.targetMotionSync - current) * 0.18);
+  } else {
+    gameHudDisplay.motionSync = null;
+  }
+
+  renderGameHudDisplay();
+
+  const done = Math.abs(scoreDelta) < 0.18
+    && Math.abs(progressDelta) < 0.18
+    && (
+      (!Number.isFinite(gameHudDisplay.targetMotionSync) && !Number.isFinite(gameHudDisplay.motionSync))
+      || Math.abs((gameHudDisplay.targetMotionSync || 0) - (gameHudDisplay.motionSync || 0)) < 0.3
+    );
+
+  if (!done) {
+    gameHudAnimationRafId = requestAnimationFrame(stepGameHudAnimation);
+    return;
+  }
+
+  gameHudDisplay.score = gameHudDisplay.targetScore;
+  gameHudDisplay.progress = gameHudDisplay.targetProgress;
+  gameHudDisplay.motionSync = Number.isFinite(gameHudDisplay.targetMotionSync)
+    ? gameHudDisplay.targetMotionSync
+    : null;
+  renderGameHudDisplay();
+}
+
+function setGameHudTargets(payload = {}) {
+  gameHudDisplay.targetScore = clamp(Number(payload.score || 0), 0, 100);
+  gameHudDisplay.targetProgress = clamp(Number(payload.score || 0), 0, 100);
+  gameHudDisplay.targetMotionSync = Number.isFinite(payload.motionSyncScore)
+    ? clamp(Number(payload.motionSyncScore), 0, 100)
+    : null;
+
+  if (!gameHudAnimationRafId) {
+    gameHudAnimationRafId = requestAnimationFrame(stepGameHudAnimation);
+  }
+}
+
 function resetWorldUi() {
+  stopGameHudAnimation(true);
   elements.worldBuildOverall.textContent = "0 / 35";
   elements.worldBuildFill.style.width = "0%";
   elements.worldBuildFoundation.textContent = "0 / 9";

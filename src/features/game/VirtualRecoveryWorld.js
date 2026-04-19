@@ -169,13 +169,17 @@ export class VirtualRecoveryWorld {
     this.running = false;
     this.rafId = null;
     this.lastTime = performance.now();
-    this.targetFrameMs = 1000 / 30;
+    this.targetFrameMs = 1000 / 60;
 
     this.progress = 0;
     this.matchScore = 0;
     this.vitalsScore = 0;
     this.motionSync = 0;
     this.trackingConfidence = 0;
+    this.targetMatchScore = 0;
+    this.targetVitalsScore = 0;
+    this.targetMotionSync = 0;
+    this.targetTrackingConfidence = 0;
     this.requiredMatch = 65;
     this.requiredTracking = 42;
 
@@ -191,6 +195,9 @@ export class VirtualRecoveryWorld {
     this.side = "left";
     this.zoneColor = zoneTint(this.zone);
     this.actionEnergy = 0;
+    this.targetActionEnergy = 0;
+    this.repFill = 0;
+    this.targetRepFill = 0;
     this.repBurst = 0;
     this.actionSwitchPulse = 0;
     this.storyChapter = STORY_CHAPTERS[0];
@@ -237,10 +244,10 @@ export class VirtualRecoveryWorld {
 
   update(payload = {}) {
     this.progress = clamp(Number(payload.score || this.progress || 0), 0, 100);
-    this.matchScore = clamp(Number(payload.movementMatchScore || this.matchScore || 0), 0, 100);
-    this.vitalsScore = clamp(Number(payload.vitalsScore || this.vitalsScore || 0), 0, 100);
-    this.motionSync = clamp(Number(payload.motionSyncScore || this.motionSync || 0), 0, 100);
-    this.trackingConfidence = clamp(Number(payload.trackingConfidence || this.trackingConfidence || 0), 0, 100);
+    this.targetMatchScore = clamp(Number(payload.movementMatchScore || this.targetMatchScore || 0), 0, 100);
+    this.targetVitalsScore = clamp(Number(payload.vitalsScore || this.targetVitalsScore || 0), 0, 100);
+    this.targetMotionSync = clamp(Number(payload.motionSyncScore || this.targetMotionSync || 0), 0, 100);
+    this.targetTrackingConfidence = clamp(Number(payload.trackingConfidence || this.targetTrackingConfidence || 0), 0, 100);
     this.requiredMatch = Number(payload.requiredMatchScore || this.requiredMatch || 65);
     this.requiredTracking = Number(payload.requiredTrackingScore || this.requiredTracking || 42);
 
@@ -271,12 +278,15 @@ export class VirtualRecoveryWorld {
     }
 
     const qualityBlend = (
-      this.matchScore * 0.42
-      + this.trackingConfidence * 0.18
-      + this.motionSync * 0.2
-      + this.vitalsScore * 0.2
+      this.targetMatchScore * 0.42
+      + this.targetTrackingConfidence * 0.18
+      + this.targetMotionSync * 0.2
+      + this.targetVitalsScore * 0.2
     ) / 100;
-    this.actionEnergy = clamp(qualityBlend, 0, 1);
+    this.targetActionEnergy = clamp(qualityBlend, 0, 1);
+    this.targetRepFill = this.currentRepTarget > 0
+      ? clamp(repsDone / this.currentRepTarget, 0, 1)
+      : 0;
 
     const scoreDrivenTarget = Math.round((this.progress / 100) * this.totalBlocks);
     const target = clamp(Math.max(scoreDrivenTarget, this.repDrivenPlacements), 0, this.totalBlocks);
@@ -307,7 +317,7 @@ export class VirtualRecoveryWorld {
       alpha: true,
       powerPreference: "high-performance"
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.4));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.2));
     this.renderer.setClearColor(0x000000, 0);
 
     this.scene = new THREE.Scene();
@@ -685,6 +695,10 @@ export class VirtualRecoveryWorld {
     this.vitalsScore = 0;
     this.motionSync = 0;
     this.trackingConfidence = 0;
+    this.targetMatchScore = 0;
+    this.targetVitalsScore = 0;
+    this.targetMotionSync = 0;
+    this.targetTrackingConfidence = 0;
     this.placedCount = 0;
     this.repDrivenPlacements = 0;
     this.lastRepCount = 0;
@@ -699,6 +713,9 @@ export class VirtualRecoveryWorld {
     this.side = context.side || "left";
     this.zoneColor = zoneTint(this.zone);
     this.storyChapter = STORY_CHAPTERS[0];
+    this.targetActionEnergy = 0;
+    this.repFill = 0;
+    this.targetRepFill = 0;
 
     this.sectionPlaced = {
       foundation: 0,
@@ -794,6 +811,15 @@ export class VirtualRecoveryWorld {
 
     this.placedCount = index;
     this.sectionPlaced[mesh.userData.section] = Math.max(this.sectionPlaced[mesh.userData.section] - 1, 0);
+  }
+
+  smoothWorldSignals() {
+    this.matchScore = lerp(this.matchScore, this.targetMatchScore, 0.16);
+    this.vitalsScore = lerp(this.vitalsScore, this.targetVitalsScore, 0.14);
+    this.motionSync = lerp(this.motionSync, this.targetMotionSync, 0.18);
+    this.trackingConfidence = lerp(this.trackingConfidence, this.targetTrackingConfidence, 0.16);
+    this.actionEnergy = lerp(this.actionEnergy, this.targetActionEnergy, 0.14);
+    this.repFill = lerp(this.repFill, this.targetRepFill, 0.18);
   }
 
   updateLighting() {
@@ -992,12 +1018,9 @@ export class VirtualRecoveryWorld {
     this.energyColumn.material.opacity = 0.12 + chapterBoost * 0.22 + this.actionEnergy * 0.14;
     this.energyColumn.scale.y = 0.9 + chapterBoost * 0.4 + trackingNorm * 0.12;
 
-    const repFill = this.currentRepTarget > 0
-      ? clamp(this.lastRepCount / this.currentRepTarget, 0, 1)
-      : 0;
     this.recoveryPads.forEach((pad, index) => {
       const threshold = (index + 1) / this.recoveryPads.length;
-      const active = repFill >= threshold;
+      const active = this.repFill >= threshold;
       pad.material.color.set(active ? accent : "#173149");
       pad.material.emissive.set(active ? accent : "#10324d");
       pad.material.emissiveIntensity = active ? 0.5 + this.repBurst * 0.18 : 0.16;
@@ -1066,6 +1089,8 @@ export class VirtualRecoveryWorld {
 
     this.repBurst = Math.max(this.repBurst - dt * 1.8, 0);
     this.actionSwitchPulse = Math.max(this.actionSwitchPulse - dt * 1.4, 0);
+    this.smoothWorldSignals();
+    this.updateLighting();
 
     this.animateHero(t);
     this.updateRecoveryProps(t);

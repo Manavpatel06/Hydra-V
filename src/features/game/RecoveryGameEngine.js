@@ -111,6 +111,11 @@ export class RecoveryGameEngine {
     this.upSeen = false;
     this.repPeakMatch = 0;
     this.repPeakTracking = 0;
+    this.stableUpFrames = 0;
+    this.stableDownFrames = 0;
+    this.lastRepCompletedAt = 0;
+    this.smoothedMovementMatch = 0;
+    this.smoothedTrackingConfidence = 0;
     this.progressScore = 0;
     this.amplitudes = [];
     this.completedActions = [];
@@ -182,6 +187,11 @@ export class RecoveryGameEngine {
     this.upSeen = false;
     this.repPeakMatch = 0;
     this.repPeakTracking = 0;
+    this.stableUpFrames = 0;
+    this.stableDownFrames = 0;
+    this.lastRepCompletedAt = 0;
+    this.smoothedMovementMatch = 0;
+    this.smoothedTrackingConfidence = 0;
     this.progressScore = 0;
     this.amplitudes = [];
     this.completedActions = [];
@@ -441,6 +451,28 @@ export class RecoveryGameEngine {
     return 0.42;
   }
 
+  getStablePhaseFrames() {
+    const level = this.activeCurriculum?.difficulty?.level || "mid";
+    if (level === "high") {
+      return { up: 3, down: 3 };
+    }
+    if (level === "low") {
+      return { up: 2, down: 2 };
+    }
+    return { up: 2, down: 3 };
+  }
+
+  getRepCooldownMs() {
+    const level = this.activeCurriculum?.difficulty?.level || "mid";
+    if (level === "high") {
+      return 420;
+    }
+    if (level === "low") {
+      return 300;
+    }
+    return 360;
+  }
+
   completeSequence(forcePerfectFinish = true) {
     const vitalsScore = this.computeVitalsScore();
     this.progressScore = forcePerfectFinish
@@ -465,6 +497,10 @@ export class RecoveryGameEngine {
     this.upSeen = false;
     this.repPeakMatch = 0;
     this.repPeakTracking = 0;
+    this.stableUpFrames = 0;
+    this.stableDownFrames = 0;
+    this.smoothedMovementMatch = 0;
+    this.smoothedTrackingConfidence = 0;
 
     if (this.currentActionIndex >= this.actions.length) {
       this.completeSequence(forcePerfectFinish);
@@ -546,27 +582,56 @@ export class RecoveryGameEngine {
     if (sample) {
       sample.trackingConfidence = trackingConfidence;
     }
-    const movementMatch = this.computeMovementMatch(action, sample, this.latestMotionSample);
+    const rawMovementMatch = this.computeMovementMatch(action, sample, this.latestMotionSample);
+    this.smoothedTrackingConfidence = this.smoothedTrackingConfidence <= 0
+      ? trackingConfidence
+      : clamp(this.smoothedTrackingConfidence * 0.56 + trackingConfidence * 0.44, 0, 1);
+    this.smoothedMovementMatch = this.smoothedMovementMatch <= 0
+      ? rawMovementMatch
+      : clamp(this.smoothedMovementMatch * 0.6 + rawMovementMatch * 0.4, 0, 1);
+    const movementMatch = this.smoothedMovementMatch;
+    const trackingConfidenceSmooth = this.smoothedTrackingConfidence;
     const repMatchThreshold = this.getRepMatchThreshold();
     const trackingThreshold = this.getTrackingThreshold();
+    const stableFrames = this.getStablePhaseFrames();
+    const repCooldownMs = this.getRepCooldownMs();
+    const cooledDown = !this.lastRepCompletedAt || (nowMs - this.lastRepCompletedAt >= repCooldownMs);
 
     if (sample) {
       if (Number.isFinite(sample.amplitude)) {
         this.amplitudes.push(sample.amplitude);
       }
 
-      if (sample.up && movementMatch >= repMatchThreshold && trackingConfidence >= trackingThreshold) {
+      if (sample.up) {
+        this.stableUpFrames += 1;
+        this.stableDownFrames = 0;
+      } else if (sample.down) {
+        this.stableDownFrames += 1;
+        if (!this.upSeen) {
+          this.stableUpFrames = 0;
+        }
+      } else {
+        this.stableUpFrames = 0;
+        this.stableDownFrames = 0;
+      }
+
+      const stableUp = this.stableUpFrames >= stableFrames.up;
+      const stableDown = this.stableDownFrames >= stableFrames.down;
+
+      if (stableUp && movementMatch >= repMatchThreshold && trackingConfidenceSmooth >= trackingThreshold && cooledDown) {
         this.upSeen = true;
         this.repPeakMatch = Math.max(this.repPeakMatch, movementMatch);
-        this.repPeakTracking = Math.max(this.repPeakTracking, trackingConfidence);
-      } else if (sample.up && this.upSeen) {
+        this.repPeakTracking = Math.max(this.repPeakTracking, trackingConfidenceSmooth);
+      } else if (stableUp && this.upSeen) {
         this.repPeakMatch = Math.max(this.repPeakMatch, movementMatch);
-        this.repPeakTracking = Math.max(this.repPeakTracking, trackingConfidence);
-      } else if (sample.down && this.upSeen) {
+        this.repPeakTracking = Math.max(this.repPeakTracking, trackingConfidenceSmooth);
+      } else if (stableDown && this.upSeen) {
         const repQualified = this.repPeakMatch >= repMatchThreshold
-          && this.repPeakTracking >= trackingThreshold;
+          && this.repPeakTracking >= trackingThreshold
+          && cooledDown;
         if (repQualified) {
           this.currentRepCount += 1;
+          this.lastRepCompletedAt = nowMs;
           const telemetry = this.getActionTelemetry(action);
           if (telemetry) {
             telemetry.repsCompleted = Math.max(telemetry.repsCompleted, this.currentRepCount);
@@ -575,6 +640,8 @@ export class RecoveryGameEngine {
         this.upSeen = false;
         this.repPeakMatch = 0;
         this.repPeakTracking = 0;
+        this.stableUpFrames = 0;
+        this.stableDownFrames = 0;
 
         if (repQualified && this.currentRepCount >= action.repsTarget) {
           this.completedActions.push({
@@ -598,16 +665,16 @@ export class RecoveryGameEngine {
     if (telemetry) {
       telemetry.samples += 1;
       telemetry.movementMatchSum += clamp(movementMatch, 0, 1) * 100;
-      telemetry.trackingSum += clamp(trackingConfidence, 0, 1) * 100;
+      telemetry.trackingSum += clamp(trackingConfidenceSmooth, 0, 1) * 100;
       telemetry.motionSyncSum += Number.isFinite(this.latestMotionSample?.syncScore)
         ? clamp(this.latestMotionSample.syncScore, 0, 100)
-        : clamp(trackingConfidence, 0, 1) * 100;
+        : clamp(trackingConfidenceSmooth, 0, 1) * 100;
       telemetry.vitalsSum += clamp(vitalsScore, 0, 1) * 100;
       telemetry.repsCompleted = Math.max(telemetry.repsCompleted, this.currentRepCount);
     }
 
     this.progressScore = this.computeProgressScore(movementMatch, vitalsScore);
-    this.emitProgress(this.latestMotionSample, movementMatch, vitalsScore, trackingConfidence);
+    this.emitProgress(this.latestMotionSample, movementMatch, vitalsScore, trackingConfidenceSmooth);
     this.drawOverlay(sample, false, this.latestMotionSample);
 
     this.rafId = requestAnimationFrame(this.tick);
