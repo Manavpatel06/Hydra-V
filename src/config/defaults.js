@@ -52,7 +52,7 @@
   },
   neuro: {
     carrierHz: 220,
-    volume: 0.24,
+    volume: 0.34,
     phaseDurationSec: {
       pre: 45,
       during: 120,
@@ -67,7 +67,9 @@
   },
   game: {
     useMirrorMotionAdapter: true,
-    useMirrorMotionOnLeftShoulder: true
+    useMirrorMotionOnLeftShoulder: true,
+    worldEngine: "hybrid",
+    splineSceneUrl: "https://prod.spline.design/8yRm8xEBLtMg0FLZ/scene.splinecode"
   },
   voice: {
     enabled: true,

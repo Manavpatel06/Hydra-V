@@ -6,6 +6,7 @@ Optional high-performance analytics service for Feature 1 (Aura-Scan+) and Featu
 - Receives incremental rPPG + eye motion telemetry from the browser.
 - Computes HR, RR interval, RMSSD HRV, micro-saccade frequency, readiness score.
 - Fuses RuView-style local vitals (heart/breath rate) on-device (no external RuView API).
+- Fuses optional wearable HR/RR telemetry (Web Bluetooth or bridge-ingested samples) with camera + RuView using confidence weighting.
 - Receives short camera bursts for thermal mapping.
 - Computes dense Farneback optical-flow variance, chain links, and Sun/Moon pad recommendations.
 

@@ -9,14 +9,14 @@
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./style.css">
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="/node_modules/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="/node_modules/@mediapipe/pose/pose.js"></script>
+  <script src="/node_modules/@mediapipe/face_mesh/face_mesh.js"></script>
 </head>
 <body>
   <main id="app-shell" class="app-shell">
     <header class="hero">
-      <p class="kicker">HYDRA-V AR FITNESS SYSTEM v2.1</p>
+      <p class="kicker">HYDRA-V</p>
       <h1>Scan -> Recover -> Build</h1>
       <p class="subtitle">
         60-second biometric intake, anatomy body-map targeting, and a movement-driven 3D recovery world.
@@ -50,6 +50,10 @@
           <span id="device-api-status" class="pill pill-idle">Logged Out</span>
         </div>
         <div>
+          <span class="label">Wearable</span>
+          <span id="wearable-status" class="pill pill-idle">Idle</span>
+        </div>
+        <div>
           <span class="label">Neuro Phase</span>
           <span id="neuro-phase-status" class="pill pill-idle">Idle</span>
         </div>
@@ -76,6 +80,7 @@
             <div class="scan-metric-row"><span>Posture</span><strong id="left-metric-posture">-- %</strong></div>
             <div class="scan-metric-row"><span>Heart Rate</span><strong id="left-metric-heart">-- bpm</strong></div>
             <div class="scan-metric-row"><span>Balance</span><strong id="left-metric-balance">-- %</strong></div>
+            <div class="scan-metric-row"><span>Calories</span><strong id="left-metric-calories">-- kcal</strong></div>
             <div class="scan-metric-row"><span>Joint Health</span><strong id="left-metric-joint">--</strong></div>
           </div>
 
@@ -126,12 +131,21 @@
           <canvas id="thermal-overlay-canvas" class="thermal-canvas"></canvas>
           <canvas id="neural-ghost-canvas" class="ghost-canvas"></canvas>
           <canvas id="game-overlay-canvas" class="game-canvas"></canvas>
+          
+          <div id="awaiting-camera-placeholder" class="camera-placeholder">
+            <div class="placeholder-circle"></div>
+            <p class="placeholder-text">AWAITING CAMERA</p>
+            <p class="placeholder-subtitle">AR OVERLAY READY IN 5+</p>
+          </div>
+          
           <div class="scan-top-hud">
             <div class="scan-brand">HYDRA-V</div>
             <div class="scan-status-dot"></div>
             <div class="scan-status-text">BODY SCAN ACTIVE</div>
             <div id="scan-inline-progress" class="scan-timer">00:60</div>
           </div>
+          
+          <div class="camera-feed-label">CAMERA FEED</div>
           <div class="stage-chip left">Anatomy + Metrics Overlay</div>
           <div class="stage-chip right">AR Recovery Overlay</div>
 
@@ -143,20 +157,24 @@
           </div>
 
           <div class="overlay-metrics aura-right">
-            <div class="metric metric-float"><span>Micro-Saccades</span><strong id="metric-aura-micro">-- Hz</strong></div>
             <div class="metric metric-float"><span>Breath Rate</span><strong id="metric-aura-breath">-- /min</strong></div>
-            <div class="metric metric-float"><span>rPPG Mode</span><strong id="metric-aura-algorithm">--</strong></div>
-            <div class="metric metric-float"><span>Vitals Source</span><strong id="metric-aura-source">--</strong></div>
+            <div class="hidden">
+              <div class="metric metric-float"><span>Micro-Saccades</span><strong id="metric-aura-micro">-- Hz</strong></div>
+              <div class="metric metric-float"><span>rPPG Mode</span><strong id="metric-aura-algorithm">--</strong></div>
+              <div class="metric metric-float"><span>Vitals Source</span><strong id="metric-aura-source">--</strong></div>
+            </div>
           </div>
 
           <div class="overlay-metrics telemetry-bottom">
             <div class="metric metric-float"><span>Live HR</span><strong id="metric-heart-rate">-- bpm</strong></div>
-            <div class="metric metric-float"><span>Live RR</span><strong id="metric-rr">-- ms</strong></div>
-            <div class="metric metric-float"><span>Live Micro</span><strong id="metric-micro">-- Hz</strong></div>
             <div class="metric metric-float"><span>Plasticity</span><strong id="metric-plasticity">-- / 10</strong></div>
+            <div class="hidden">
+              <div class="metric metric-float"><span>Live RR</span><strong id="metric-rr">-- ms</strong></div>
+              <div class="metric metric-float"><span>Live Micro</span><strong id="metric-micro">-- Hz</strong></div>
+            </div>
           </div>
 
-          <aside class="game-build-panel">
+          <aside id="game-build-panel" class="game-build-panel">
             <h4>Build Progress</h4>
             <div class="world-overall">
               <span>Overall</span>
@@ -166,7 +184,7 @@
               <div id="world-build-fill"></div>
             </div>
             <div class="world-sections">
-              <div><span>Foundation</span><strong id="world-build-foundation">0 / 9</strong></div>
+              <div><span>Formation</span><strong id="world-build-formation">0 / 9</strong></div>
               <div><span>Walls</span><strong id="world-build-walls">0 / 16</strong></div>
               <div><span>Roof</span><strong id="world-build-roof">0 / 9</strong></div>
               <div><span>Peak</span><strong id="world-build-peak">0 / 1</strong></div>
@@ -238,6 +256,7 @@
 
             <div class="button-row">
               <button id="game-start-button" type="button">Start Guided Game</button>
+              <button id="game-skip-button" type="button" class="ghost">Skip Current Exercise</button>
               <button id="game-stop-button" type="button" class="ghost">Stop Game</button>
             </div>
           </div>
@@ -315,7 +334,7 @@
       </div>
     </section>
 
-    <details class="panel tech-drawer hidden">
+    <details class="panel tech-drawer hidden" open>
       <summary>Device + Voice Controls</summary>
 
       <div class="controls-grid">
@@ -358,6 +377,11 @@
         <button id="mqtt-pause" type="button" class="ghost">Pause</button>
         <button id="mqtt-resume" type="button" class="ghost">Resume</button>
         <button id="mqtt-stop" type="button" class="ghost">Stop</button>
+      </div>
+
+      <div class="button-row">
+        <button id="wearable-connect" type="button">Connect Wearable HR</button>
+        <button id="wearable-disconnect" type="button" class="ghost">Disconnect Wearable</button>
       </div>
 
       <div class="button-row">

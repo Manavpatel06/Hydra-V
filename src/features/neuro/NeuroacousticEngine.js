@@ -56,9 +56,27 @@ export class NeuroacousticEngine {
     rightGain.gain.value = 0;
 
     const leftPan = this.audioContext.createStereoPanner();
-    leftPan.pan.value = -1;
+    leftPan.pan.value = -0.85;
     const rightPan = this.audioContext.createStereoPanner();
-    rightPan.pan.value = 1;
+    rightPan.pan.value = 0.85;
+
+    const pulseOsc = this.audioContext.createOscillator();
+    pulseOsc.type = "triangle";
+    const pulseToneGain = this.audioContext.createGain();
+    pulseToneGain.gain.value = 0.018;
+    const pulseLevel = this.audioContext.createGain();
+    pulseLevel.gain.value = 0;
+    const beatLfo = this.audioContext.createOscillator();
+    beatLfo.type = "sine";
+    const beatDepth = this.audioContext.createGain();
+    beatDepth.gain.value = 0.012;
+
+    const dynamics = this.audioContext.createDynamicsCompressor();
+    dynamics.threshold.value = -18;
+    dynamics.knee.value = 18;
+    dynamics.ratio.value = 2.6;
+    dynamics.attack.value = 0.01;
+    dynamics.release.value = 0.22;
 
     const master = this.audioContext.createGain();
     master.gain.setValueAtTime(0, now);
@@ -69,23 +87,39 @@ export class NeuroacousticEngine {
     leftGain.connect(leftPan);
     rightGain.connect(rightPan);
 
-    leftPan.connect(master);
-    rightPan.connect(master);
+    pulseOsc.connect(pulseToneGain);
+    pulseToneGain.connect(pulseLevel);
+    beatLfo.connect(beatDepth);
+    beatDepth.connect(pulseToneGain.gain);
+
+    leftPan.connect(dynamics);
+    rightPan.connect(dynamics);
+    pulseLevel.connect(dynamics);
+    dynamics.connect(master);
     master.connect(this.audioContext.destination);
 
     leftOsc.start(now);
     rightOsc.start(now);
+    pulseOsc.start(now);
+    beatLfo.start(now);
 
     this.nodes = {
       leftOsc,
       rightOsc,
       leftGain,
       rightGain,
+      pulseOsc,
+      pulseToneGain,
+      pulseLevel,
+      beatLfo,
+      beatDepth,
+      dynamics,
       master
     };
 
     this.applyCarrierAndBeat(this.carrierHz, this.currentBeatHz, 0);
-    this.setStereoVolume(0.22, 0.2);
+    this.setStereoVolume(0.28, 0.2);
+    this.setPulseVolume(0.92, 0.2);
   }
 
   setCarrierHz(carrierHz) {
@@ -117,6 +151,16 @@ export class NeuroacousticEngine {
     this.nodes.rightGain.gain.linearRampToValueAtTime(level, now + rampSeconds);
   }
 
+  setPulseVolume(value, rampSeconds = 0.2) {
+    if (!this.nodes) {
+      return;
+    }
+    const level = clamp(value, 0, 1);
+    const now = this.audioContext.currentTime;
+    this.nodes.pulseLevel.gain.cancelScheduledValues(now);
+    this.nodes.pulseLevel.gain.linearRampToValueAtTime(level, now + rampSeconds);
+  }
+
   applyCarrierAndBeat(carrierHz, beatHz, rampSeconds = 0.25) {
     if (!this.nodes) {
       return;
@@ -132,9 +176,16 @@ export class NeuroacousticEngine {
 
     this.nodes.leftOsc.frequency.cancelScheduledValues(now);
     this.nodes.rightOsc.frequency.cancelScheduledValues(now);
+    this.nodes.beatLfo.frequency.cancelScheduledValues(now);
+    this.nodes.pulseOsc.frequency.cancelScheduledValues(now);
 
     this.nodes.leftOsc.frequency.linearRampToValueAtTime(leftFrequency, now + rampSeconds);
     this.nodes.rightOsc.frequency.linearRampToValueAtTime(rightFrequency, now + rampSeconds);
+    this.nodes.beatLfo.frequency.linearRampToValueAtTime(boundedBeat, now + rampSeconds);
+    this.nodes.pulseOsc.frequency.linearRampToValueAtTime(
+      clamp(carrierHz * 0.56, 84, 176),
+      now + rampSeconds
+    );
   }
 
   updateBiometrics(frame = {}) {
@@ -179,8 +230,10 @@ export class NeuroacousticEngine {
 
     if (phase === "idle") {
       this.setStereoVolume(0, 0.25);
+      this.setPulseVolume(0, 0.2);
     } else {
-      this.setStereoVolume(0.22, 0.25);
+      this.setStereoVolume(0.28, 0.25);
+      this.setPulseVolume(0.92, 0.2);
       this.retargetBeat(phase);
     }
 

@@ -75,7 +75,10 @@ def analyze_fascial_thermal(
         h, w = next_gray.shape[:2]
 
         flow = cv2.calcOpticalFlowFarneback(prev_gray, next_gray, None, 0.5, 3, 15, 3, 5, 1.1, 0)
-        magnitude = cv2.magnitude(flow[..., 0], flow[..., 1])
+        # Remove frame-global drift so cold-zone scores are less sensitive to camera shake.
+        flow_x = flow[..., 0] - np.median(flow[..., 0])
+        flow_y = flow[..., 1] - np.median(flow[..., 1])
+        magnitude = cv2.magnitude(flow_x, flow_y)
 
         global_var = float(np.var(magnitude)) + 1e-8
         global_mean = float(np.mean(magnitude)) + 1e-8
@@ -106,7 +109,9 @@ def analyze_fascial_thermal(
 
             relative_var = float(np.var(roi) / global_var)
             relative_mean = float(np.mean(roi) / global_mean)
-            frame_value = relative_var * 0.72 + relative_mean * 0.28
+            p75 = float(np.percentile(roi, 75))
+            relative_p75 = p75 / (float(np.percentile(magnitude, 75)) + 1e-8)
+            frame_value = relative_var * 0.55 + relative_mean * 0.25 + relative_p75 * 0.20
 
             zone_series[zone_id].append(frame_value)
             zone_anchor_samples[zone_id].append((point_px[0] / w, point_px[1] / h))
@@ -288,7 +293,8 @@ def _build_zone_records(
         sample_array = np.array(samples, dtype=np.float64)
         perfusion_index = float(np.mean(sample_array))
         temporal_variance = float(np.var(sample_array))
-        combined_index = perfusion_index * 0.7 + temporal_variance * 0.3
+        temporal_stability = float(1.0 / (1.0 + np.std(sample_array)))
+        combined_index = perfusion_index * 0.62 + temporal_variance * 0.22 + temporal_stability * 0.16
 
         anchors = zone_anchor_samples.get(zone_id) or [DEFAULT_ZONE_ANCHORS[zone_id]]
         anchor = (
@@ -304,6 +310,7 @@ def _build_zone_records(
                 "sample_count": int(len(samples)),
                 "perfusion_index": perfusion_index,
                 "temporal_variance": temporal_variance,
+                "temporal_stability": temporal_stability,
                 "combined_index": combined_index,
                 "anchor": anchor,
                 "cold_score": 0.5,
@@ -316,12 +323,12 @@ def _build_zone_records(
 
 def _apply_cold_scores(records: list[dict[str, Any]]) -> None:
     values = np.array([record["combined_index"] for record in records], dtype=np.float64)
-    low = float(np.min(values))
-    high = float(np.max(values))
-    scale = max(high - low, 1e-8)
+    median_value = float(np.median(values))
+    mad = float(np.median(np.abs(values - median_value))) + 1e-8
 
     for record in records:
-        perfusion_norm = (record["combined_index"] - low) / scale
+        robust_z = (record["combined_index"] - median_value) / (1.4826 * mad)
+        perfusion_norm = 1.0 / (1.0 + np.exp(-robust_z))
         record["perfusion_norm"] = float(np.clip(perfusion_norm, 0.0, 1.0))
         record["cold_score"] = float(np.clip(1.0 - record["perfusion_norm"], 0.0, 1.0))
 

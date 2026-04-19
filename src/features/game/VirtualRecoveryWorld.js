@@ -100,6 +100,7 @@ export class VirtualRecoveryWorld {
     this.running = false;
     this.rafId = null;
     this.lastTime = performance.now();
+    this.targetFrameMs = 1000 / 30;
 
     this.progress = 0;
     this.matchScore = 0;
@@ -195,10 +196,11 @@ export class VirtualRecoveryWorld {
   initialize() {
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
-      antialias: true,
-      alpha: true
+      antialias: false,
+      alpha: true,
+      powerPreference: "high-performance"
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color("#041327");
@@ -472,6 +474,10 @@ export class VirtualRecoveryWorld {
     }
 
     const now = performance.now();
+    if (this.lastTime && (now - this.lastTime) < this.targetFrameMs) {
+      this.rafId = requestAnimationFrame(this.animate);
+      return;
+    }
     const dt = Math.min((now - this.lastTime) / 1000, 0.06);
     this.lastTime = now;
     const t = now * 0.001;

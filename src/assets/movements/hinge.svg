@@ -1,0 +1,37 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="480" height="320" viewBox="0 0 480 320" role="img" aria-label="Hip Hinge movement guide">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#102d41" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#0a1f2f" stop-opacity="0.96" />
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#66e6ff" />
+    </marker>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.5" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="480" height="320" rx="18" fill="url(#bg)" />
+
+  <g opacity="0.9" fill="#d4d8de" stroke="#edf0f4" stroke-opacity="0.45" stroke-width="1.1">
+    <circle cx="240" cy="60" r="22" />
+    <rect x="218" y="84" width="44" height="82" rx="20" />
+    <rect x="174" y="102" width="34" height="98" rx="16" />
+    <rect x="272" y="102" width="34" height="98" rx="16" />
+    <rect x="206" y="170" width="30" height="108" rx="15" />
+    <rect x="244" y="170" width="30" height="108" rx="15" />
+    <ellipse cx="221" cy="292" rx="18" ry="9" />
+    <ellipse cx="259" cy="292" rx="18" ry="9" />
+  </g>
+
+  <g fill="none" stroke="#66e6ff" stroke-width="6" stroke-linecap="round" filter="url(#glow)">
+    <path d="M244 156 Q292 178 310 224" marker-end="url(#arrow)" />
+  </g>
+
+  <text x="20" y="36" fill="#def4ff" font-family="Sora, Arial, sans-serif" font-size="24" font-weight="600">Hip Hinge</text>
+  <text x="20" y="62" fill="#a7cfe0" font-family="JetBrains Mono, Consolas, monospace" font-size="14">Hinge from the hips</text>
+</svg>

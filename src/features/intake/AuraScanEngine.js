@@ -8,13 +8,12 @@ import {
   mean,
   rmssd
 } from "./SignalProcessing.js";
-import {
-  buildCanonicalPose,
-  drawAnatomyFigure,
-  drawZoneHighlight
-} from "../visual/AnatomyFigureRenderer.js";
+import { buildCanonicalPose } from "../visual/AnatomyFigureRenderer.js";
 
-const BODY_SILHOUETTE_URL = "/src/assets/anatomy-silhouette.svg";
+const BODY_SILHOUETTE_CANDIDATES = [
+  "/src/assets/anatomy-silhouette.png",
+  "/src/assets/anatomy-silhouette.svg"
+];
 
 const DEFAULT_SCAN_SECONDS = 60;
 
@@ -29,6 +28,41 @@ const POSE_CONNECTIONS = [
 const FACEMESH_FOREHEAD = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323];
 const LEFT_EYE_CLUSTER = [33, 133, 159, 145, 153];
 const RIGHT_EYE_CLUSTER = [362, 263, 386, 374, 380];
+const LEFT_IRIS_CLUSTER = [468, 469, 470, 471, 472];
+const RIGHT_IRIS_CLUSTER = [473, 474, 475, 476, 477];
+const POSE_QUALITY_POINTS = [11, 12, 23, 24, 25, 26, 27, 28];
+const SYMMETRY_ALERT_THRESHOLD_PCT = 6;
+const MIN_SYMMETRY_VISIBILITY = 0.2;
+const MEDIAPIPE_LOADERS = Object.freeze({
+  camera: [
+    {
+      script: "/node_modules/@mediapipe/camera_utils/camera_utils.js"
+    },
+    {
+      script: "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"
+    }
+  ],
+  pose: [
+    {
+      script: "/node_modules/@mediapipe/pose/pose.js",
+      assetRoot: "/node_modules/@mediapipe/pose"
+    },
+    {
+      script: "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js",
+      assetRoot: "https://cdn.jsdelivr.net/npm/@mediapipe/pose"
+    }
+  ],
+  faceMesh: [
+    {
+      script: "/node_modules/@mediapipe/face_mesh/face_mesh.js",
+      assetRoot: "/node_modules/@mediapipe/face_mesh"
+    },
+    {
+      script: "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js",
+      assetRoot: "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"
+    }
+  ]
+});
 
 export class AuraScanEngine {
   constructor({
@@ -41,18 +75,18 @@ export class AuraScanEngine {
     this.eventBus = eventBus;
     this.videoEl = videoEl;
     this.cameraCanvas = cameraCanvasEl;
-    this.cameraCtx = this.cameraCanvas.getContext("2d");
+    // Frequent getImageData calls for rPPG sampling perform better with this hint.
+    this.cameraCtx = this.cameraCanvas.getContext("2d", { willReadFrequently: true })
+      || this.cameraCanvas.getContext("2d");
     this.bodyMapCanvas = bodyMapCanvasEl;
     this.bodyMapCtx = this.bodyMapCanvas.getContext("2d");
+    this.bodyHeatCanvas = (typeof OffscreenCanvas !== "undefined")
+      ? new OffscreenCanvas(1, 1)
+      : document.createElement("canvas");
+    this.bodyHeatCtx = this.bodyHeatCanvas.getContext("2d");
     this.bodySilhouetteImage = new Image();
     this.bodySilhouetteLoaded = false;
-    this.bodySilhouetteImage.onload = () => {
-      this.bodySilhouetteLoaded = true;
-    };
-    this.bodySilhouetteImage.onerror = () => {
-      this.bodySilhouetteLoaded = false;
-    };
-    this.bodySilhouetteImage.src = BODY_SILHOUETTE_URL;
+    this.loadBodySilhouette();
 
     this.stream = null;
     this.pose = null;
@@ -64,14 +98,23 @@ export class AuraScanEngine {
     this.scanDurationSec = DEFAULT_SCAN_SECONDS;
 
     this.lastPose = null;
+    this.lastPoseWorld = null;
     this.lastFace = null;
+    this.lastFaceRaw = null;
     this.lastMetrics = null;
     this.lastBackendMetrics = null;
+    this.lastStableMetrics = null;
+    this.lastSymmetrySnapshot = null;
 
     this.ppgSamples = [];
     this.eyeMotionSamples = [];
+    this.wearableSamples = [];
     this.rrIntervals = [];
     this.lastRPeakAt = null;
+    this.foreheadRoiState = null;
+    this.metricSmoothers = {};
+    this.zoneStabilityState = new Map();
+    this.symmetryPairState = new Map();
 
     this.backendPreferredAnalytics = analytics.usePython === true;
     this.useBackendAnalytics = this.backendPreferredAnalytics;
@@ -84,23 +127,72 @@ export class AuraScanEngine {
     this.backendErrorCount = 0;
     this.sentPpgIndex = 0;
     this.sentEyeIndex = 0;
+    this.sentWearableIndex = 0;
+
+    const hardwareThreads = Number(navigator?.hardwareConcurrency || 8);
+    const deviceMemoryGb = Number(navigator?.deviceMemory || 8);
+    this.lowPowerMode = hardwareThreads <= 6 || deviceMemoryGb <= 6;
+
+    this.poseIntervalMs = this.lowPowerMode ? 84 : 62;
+    this.faceIntervalMs = this.lowPowerMode ? 68 : 50;
+    this.renderIntervalMs = 33;
+    this.metricsIntervalMs = 120;
+    this.auraEmitIntervalMs = 120;
+    this.biometricEmitIntervalMs = 66;
+    this.bodyMapIntervalMs = 140;
+
+    this.poseInFlight = false;
+    this.faceInFlight = false;
+    this.lastPoseDispatchAt = 0;
+    this.lastFaceDispatchAt = 0;
+    this.lastRenderAt = 0;
+    this.lastMetricsComputeAt = 0;
+    this.lastAuraEmitAt = 0;
+    this.lastBiometricEmitAt = 0;
+    this.lastBodyMapDrawAt = Number.NEGATIVE_INFINITY;
 
     this.onResultsPose = this.onResultsPose.bind(this);
     this.onResultsFace = this.onResultsFace.bind(this);
+    this.mediaPipeRoots = {
+      pose: MEDIAPIPE_LOADERS.pose[0].assetRoot,
+      faceMesh: MEDIAPIPE_LOADERS.faceMesh[0].assetRoot
+    };
   }
 
   isSupported() {
     return !!(navigator?.mediaDevices?.getUserMedia);
   }
 
+  loadBodySilhouette() {
+    let index = 0;
+    const tryNext = () => {
+      if (index >= BODY_SILHOUETTE_CANDIDATES.length) {
+        this.bodySilhouetteLoaded = false;
+        return;
+      }
+      const src = BODY_SILHOUETTE_CANDIDATES[index];
+      index += 1;
+      this.bodySilhouetteImage.onload = () => {
+        this.bodySilhouetteLoaded = true;
+      };
+      this.bodySilhouetteImage.onerror = () => {
+        tryNext();
+      };
+      this.bodySilhouetteImage.src = src;
+    };
+    tryNext();
+  }
+
   async initModels() {
-    if (!window.Pose || !window.FaceMesh) {
+    await this.ensureMediaPipeDependencies();
+
+    if (!window.Camera || !window.Pose || !window.FaceMesh) {
       throw new Error("MediaPipe Pose and FaceMesh scripts are not loaded.");
     }
 
     if (!this.pose) {
       this.pose = new window.Pose({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        locateFile: (file) => `${this.mediaPipeRoots.pose}/${file}`
       });
 
       this.pose.setOptions({
@@ -115,7 +207,7 @@ export class AuraScanEngine {
 
     if (!this.faceMesh) {
       this.faceMesh = new window.FaceMesh({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        locateFile: (file) => `${this.mediaPipeRoots.faceMesh}/${file}`
       });
 
       this.faceMesh.setOptions({
@@ -126,6 +218,19 @@ export class AuraScanEngine {
       });
 
       this.faceMesh.onResults(this.onResultsFace);
+    }
+  }
+
+  async ensureMediaPipeDependencies() {
+    await ensureMediaPipeGlobal("Camera", MEDIAPIPE_LOADERS.camera);
+    const poseSource = await ensureMediaPipeGlobal("Pose", MEDIAPIPE_LOADERS.pose);
+    const faceMeshSource = await ensureMediaPipeGlobal("FaceMesh", MEDIAPIPE_LOADERS.faceMesh);
+
+    if (poseSource?.assetRoot) {
+      this.mediaPipeRoots.pose = poseSource.assetRoot;
+    }
+    if (faceMeshSource?.assetRoot) {
+      this.mediaPipeRoots.faceMesh = faceMeshSource.assetRoot;
     }
   }
 
@@ -142,8 +247,9 @@ export class AuraScanEngine {
 
     this.stream = await navigator.mediaDevices.getUserMedia({
       video: {
-        width: { ideal: 960 },
-        height: { ideal: 540 },
+        width: { ideal: this.lowPowerMode ? 720 : 960 },
+        height: { ideal: this.lowPowerMode ? 405 : 540 },
+        frameRate: { ideal: 30, max: 30 },
         facingMode: "user"
       },
       audio: false
@@ -158,10 +264,43 @@ export class AuraScanEngine {
     this.cameraLoop = new window.Camera(this.videoEl, {
       width: this.cameraCanvas.width,
       height: this.cameraCanvas.height,
-      onFrame: async () => {
-        await this.pose.send({ image: this.videoEl });
-        await this.faceMesh.send({ image: this.videoEl });
-        this.renderFrame();
+      onFrame: () => {
+        const nowMs = performance.now();
+
+        if (!this.poseInFlight && (nowMs - this.lastPoseDispatchAt >= this.poseIntervalMs)) {
+          this.poseInFlight = true;
+          this.lastPoseDispatchAt = nowMs;
+          void this.pose.send({ image: this.videoEl })
+            .catch((error) => {
+              this.eventBus.emit(EVENTS.WARNING, {
+                scope: "aura-pose",
+                message: error?.message || "MediaPipe pose processing failed."
+              });
+            })
+            .finally(() => {
+              this.poseInFlight = false;
+            });
+        }
+
+        if (!this.faceInFlight && (nowMs - this.lastFaceDispatchAt >= this.faceIntervalMs)) {
+          this.faceInFlight = true;
+          this.lastFaceDispatchAt = nowMs;
+          void this.faceMesh.send({ image: this.videoEl })
+            .catch((error) => {
+              this.eventBus.emit(EVENTS.WARNING, {
+                scope: "aura-facemesh",
+                message: error?.message || "MediaPipe face mesh processing failed."
+              });
+            })
+            .finally(() => {
+              this.faceInFlight = false;
+            });
+        }
+
+        if (nowMs - this.lastRenderAt >= this.renderIntervalMs) {
+          this.lastRenderAt = nowMs;
+          this.renderFrame(nowMs);
+        }
       }
     });
 
@@ -188,6 +327,9 @@ export class AuraScanEngine {
     }
 
     this.running = false;
+    this.poseInFlight = false;
+    this.faceInFlight = false;
+    this.lastRenderAt = 0;
 
     this.eventBus.emit(EVENTS.AURA_SCAN_STATUS, {
       status: "camera_stopped"
@@ -204,19 +346,36 @@ export class AuraScanEngine {
     this.scanning = true;
     this.ppgSamples = [];
     this.eyeMotionSamples = [];
+    this.wearableSamples = [];
     this.rrIntervals = [];
     this.lastRPeakAt = null;
+    this.foreheadRoiState = null;
+    this.metricSmoothers = {};
+    this.zoneStabilityState.clear();
+    this.symmetryPairState.clear();
+    this.lastMetrics = null;
+    this.lastStableMetrics = null;
     this.lastBackendMetrics = null;
+    this.lastSymmetrySnapshot = null;
     this.backendErrorCount = 0;
     this.sentPpgIndex = 0;
     this.sentEyeIndex = 0;
+    this.sentWearableIndex = 0;
     this.lastBackendAt = 0;
     this.backendSessionId = generateSessionId();
     this.useBackendAnalytics = this.backendPreferredAnalytics;
+    this.lastMetricsComputeAt = 0;
+    this.lastAuraEmitAt = 0;
+    this.lastBiometricEmitAt = 0;
 
     if (this.useBackendAnalytics) {
       this.resetBackendSession().catch(() => {
         this.backendErrorCount += 1;
+        this.useBackendAnalytics = false;
+        this.eventBus.emit(EVENTS.WARNING, {
+          scope: "aura-python-analytics",
+          message: "Python analytics unavailable at scan start. Falling back to local JS metrics."
+        });
       });
     }
 
@@ -243,7 +402,10 @@ export class AuraScanEngine {
       return;
     }
 
-    this.lastPose = results.poseLandmarks;
+    this.lastPose = this.smoothLandmarks2d(results.poseLandmarks, this.lastPose, 0.34);
+    this.lastPoseWorld = Array.isArray(results.poseWorldLandmarks) && results.poseWorldLandmarks.length
+      ? this.smoothLandmarks3d(results.poseWorldLandmarks, this.lastPoseWorld, 0.28)
+      : null;
   }
 
   onResultsFace(results) {
@@ -251,10 +413,11 @@ export class AuraScanEngine {
       return;
     }
 
-    this.lastFace = results.multiFaceLandmarks[0];
+    this.lastFaceRaw = results.multiFaceLandmarks[0];
+    this.lastFace = this.smoothLandmarks2d(this.lastFaceRaw, this.lastFace, 0.38);
   }
 
-  renderFrame() {
+  renderFrame(nowMs = performance.now()) {
     const width = this.cameraCanvas.width;
     const height = this.cameraCanvas.height;
 
@@ -263,7 +426,7 @@ export class AuraScanEngine {
     this.cameraCtx.drawImage(this.videoEl, 0, 0, width, height);
 
     if (this.lastPose) {
-      this.drawPose(this.lastPose, this.cameraCtx, width, height, "rgba(14,165,160,0.85)", 2);
+      this.drawPose(this.lastPose, this.cameraCtx, width, height, "rgba(56, 225, 244, 0.96)", 2.4);
     }
 
     if (this.lastFace) {
@@ -273,14 +436,16 @@ export class AuraScanEngine {
     this.cameraCtx.restore();
 
     if (this.scanning) {
-      this.ingestScanFrame();
+      this.ingestScanFrame(nowMs);
     }
 
-    this.drawBodyMap();
+    if (nowMs - this.lastBodyMapDrawAt >= this.bodyMapIntervalMs) {
+      this.lastBodyMapDrawAt = nowMs;
+      this.drawBodyMap();
+    }
   }
 
-  ingestScanFrame() {
-    const nowMs = performance.now();
+  ingestScanFrame(nowMs = performance.now()) {
     const elapsedMs = nowMs - this.scanStartedAt;
     const progress = clamp(elapsedMs / (this.scanDurationSec * 1000), 0, 1);
 
@@ -289,29 +454,40 @@ export class AuraScanEngine {
       this.captureEyeMotionSample(nowMs);
     }
 
-    const localMetrics = this.computeMetrics();
-    this.maybeRequestBackend(nowMs, localMetrics);
-    this.lastMetrics = this.mergeMetrics(localMetrics, this.lastBackendMetrics);
+    const shouldRecomputeMetrics = !this.lastMetrics || (nowMs - this.lastMetricsComputeAt >= this.metricsIntervalMs);
+    if (shouldRecomputeMetrics) {
+      this.lastMetricsComputeAt = nowMs;
+      const localMetrics = this.computeMetrics();
+      this.maybeRequestBackend(nowMs, localMetrics);
+      const mergedMetrics = this.mergeMetrics(localMetrics, this.lastBackendMetrics);
+      this.lastMetrics = this.stabilizeMetrics(mergedMetrics);
+    }
 
     if (this.lastMetrics) {
-      this.eventBus.emit(EVENTS.AURA_SCAN_FRAME, {
-        progress,
-        ...this.lastMetrics
-      });
+      if (nowMs - this.lastAuraEmitAt >= this.auraEmitIntervalMs || progress >= 0.999) {
+        this.lastAuraEmitAt = nowMs;
+        this.eventBus.emit(EVENTS.AURA_SCAN_FRAME, {
+          progress,
+          ...this.lastMetrics
+        });
+      }
 
       const rrInterval = this.lastMetrics.rrIntervalMs;
       const hr = this.lastMetrics.heartRateBpm;
       const hrv = this.lastMetrics.hrvRmssdMs;
 
       const hasRPeak = Number.isFinite(rrInterval) && this.detectRPeak(nowMs, rrInterval);
-      this.eventBus.emit(EVENTS.BIOMETRIC_FRAME, {
-        timestampMs: nowMs,
-        rPeakDetected: hasRPeak,
-        rrIntervalMs: rrInterval,
-        heartRateBpm: hr,
-        hrvRmssdMs: hrv,
-        microsaccadeHz: this.lastMetrics.microsaccadeHz
-      });
+      if (nowMs - this.lastBiometricEmitAt >= this.biometricEmitIntervalMs) {
+        this.lastBiometricEmitAt = nowMs;
+        this.eventBus.emit(EVENTS.BIOMETRIC_FRAME, {
+          timestampMs: nowMs,
+          rPeakDetected: hasRPeak,
+          rrIntervalMs: rrInterval,
+          heartRateBpm: hr,
+          hrvRmssdMs: hrv,
+          microsaccadeHz: this.lastMetrics.microsaccadeHz
+        });
+      }
     }
 
     if (elapsedMs >= this.scanDurationSec * 1000) {
@@ -340,13 +516,20 @@ export class AuraScanEngine {
   finishScan() {
     this.scanning = false;
 
-    const summary = this.lastMetrics || this.computeMetrics();
+    const summary = this.lastMetrics || this.computeMetrics() || this.buildDegradedSummary();
     if (!summary) {
       this.eventBus.emit(EVENTS.AURA_SCAN_STATUS, {
         status: "scan_failed",
         message: "Unable to compute scan metrics."
       });
       return;
+    }
+
+    if (summary.degraded === true) {
+      this.eventBus.emit(EVENTS.WARNING, {
+        scope: "aura-scan-quality",
+        message: "Aura scan completed with limited signal quality. Position face/body clearly and retry for best accuracy."
+      });
     }
 
     this.eventBus.emit(EVENTS.AURA_SCAN_COMPLETE, {
@@ -395,7 +578,9 @@ export class AuraScanEngine {
     const ppgSamples = this.ppgSamples.slice(this.sentPpgIndex).map((sample) => ({
       timestamp_ms: sample.timestampMs,
       value: sample.value,
-      mode: sample.mode
+      mode: sample.mode,
+      rgb: Array.isArray(sample.rgb) ? sample.rgb : [],
+      quality: Number.isFinite(sample.quality) ? sample.quality : null
     }));
 
     const eyeSamples = this.eyeMotionSamples.slice(this.sentEyeIndex).map((sample) => ({
@@ -404,7 +589,18 @@ export class AuraScanEngine {
       y: sample.y
     }));
 
-    const symmetry = this.lastPose ? this.computeSymmetry(this.lastPose) : { deltaPct: null, flaggedZones: [] };
+    const wearableSamples = this.wearableSamples.slice(this.sentWearableIndex).map((sample) => ({
+      timestamp_ms: sample.timestampMs,
+      heart_rate_bpm: sample.heartRateBpm,
+      rr_interval_ms: sample.rrIntervalMs,
+      rr_intervals_ms: Array.isArray(sample.rrIntervalsMs) ? sample.rrIntervalsMs : [],
+      confidence: sample.confidence,
+      source: sample.source
+    }));
+
+    const symmetry = this.lastPose
+      ? this.computeSymmetry(this.lastPose, this.lastPoseWorld)
+      : { deltaPct: null, flaggedZones: [] };
 
     const payload = {
       session_id: this.backendSessionId,
@@ -412,6 +608,7 @@ export class AuraScanEngine {
       scan_duration_sec: this.scanDurationSec,
       ppg_samples: ppgSamples,
       eye_samples: eyeSamples,
+      wearable_samples: wearableSamples,
       pose_summary: {
         symmetry_delta_pct: symmetry.deltaPct,
         flagged_zones: symmetry.flaggedZones
@@ -424,7 +621,10 @@ export class AuraScanEngine {
         microsaccade_hz: localMetrics?.microsaccadeHz ?? null,
         symmetry_delta_pct: localMetrics?.symmetryDeltaPct ?? symmetry.deltaPct,
         flagged_zones: localMetrics?.flaggedZones ?? symmetry.flaggedZones,
-        readiness_score: localMetrics?.readinessScore ?? null
+        readiness_score: localMetrics?.readinessScore ?? null,
+        camera_signal_quality: localMetrics?.cameraSignalQuality ?? null,
+        pose_quality: localMetrics?.poseQuality ?? null,
+        motion_artifact_score: localMetrics?.motionArtifactScore ?? null
       }
     };
 
@@ -447,6 +647,7 @@ export class AuraScanEngine {
 
       this.sentPpgIndex = this.ppgSamples.length;
       this.sentEyeIndex = this.eyeMotionSamples.length;
+      this.sentWearableIndex = this.wearableSamples.length;
       this.lastBackendMetrics = this.normalizeBackendMetrics(body.metrics);
 
       if (this.lastBackendMetrics) {
@@ -491,7 +692,10 @@ export class AuraScanEngine {
       readinessScore: backendMetrics.readinessScore ?? localMetrics?.readinessScore ?? null,
       cnsFatigue: backendMetrics.cnsFatigue ?? localMetrics?.cnsFatigue ?? null,
       breathRatePerMin: backendMetrics.breathRatePerMin ?? localMetrics?.breathRatePerMin ?? null,
-      vitalsSource: backendMetrics.vitalsSource ?? null
+      vitalsSource: backendMetrics.vitalsSource ?? localMetrics?.vitalsSource ?? null,
+      heartRateConfidence: backendMetrics.heartRateConfidence ?? localMetrics?.heartRateConfidence ?? null,
+      cameraSignalQuality: backendMetrics.cameraSignalQuality ?? localMetrics?.cameraSignalQuality ?? null,
+      poseQuality: backendMetrics.poseQuality ?? localMetrics?.poseQuality ?? null
     };
   }
 
@@ -521,12 +725,191 @@ export class AuraScanEngine {
       readinessScore: asFinite(metrics.readiness_score),
       cnsFatigue,
       breathRatePerMin: asFinite(metrics.breath_rate_per_min),
-      vitalsSource: metrics.vitals_source ?? null
+      vitalsSource: metrics.vitals_source ?? null,
+      heartRateConfidence: asFinite(metrics.heart_rate_confidence),
+      cameraSignalQuality: asFinite(metrics.camera_signal_quality),
+      poseQuality: asFinite(metrics.pose_quality)
     };
   }
 
+  stabilizeMetrics(metrics) {
+    if (!metrics || typeof metrics !== "object") {
+      return null;
+    }
+
+    const qualityHr = bestFinite(metrics.heartRateConfidence, metrics.cameraSignalQuality, 0.52);
+    const qualityPose = bestFinite(metrics.poseQuality, 0.62);
+    const stable = {
+      ...metrics
+    };
+
+    stable.heartRateBpm = roundIfFinite(this.smoothNumericMetric("heartRateBpm", metrics.heartRateBpm, {
+      alpha: 0.2,
+      maxStep: 1.4,
+      quality: qualityHr,
+      minQuality: 0.26
+    }), 1);
+    stable.rrIntervalMs = roundIfFinite(this.smoothNumericMetric("rrIntervalMs", metrics.rrIntervalMs, {
+      alpha: 0.2,
+      maxStep: 18,
+      quality: qualityHr,
+      minQuality: 0.24
+    }), 1);
+    stable.hrvRmssdMs = roundIfFinite(this.smoothNumericMetric("hrvRmssdMs", metrics.hrvRmssdMs, {
+      alpha: 0.18,
+      maxStep: 2.2,
+      quality: qualityHr,
+      minQuality: 0.22
+    }), 1);
+    stable.microsaccadeHz = roundIfFinite(this.smoothNumericMetric("microsaccadeHz", metrics.microsaccadeHz, {
+      alpha: 0.15,
+      maxStep: 0.035,
+      quality: qualityPose,
+      minQuality: 0.2
+    }), 3);
+    stable.symmetryDeltaPct = roundIfFinite(this.smoothNumericMetric("symmetryDeltaPct", metrics.symmetryDeltaPct, {
+      alpha: 0.18,
+      maxStep: 0.55,
+      quality: qualityPose,
+      minQuality: 0.2
+    }), 2);
+    stable.readinessScore = roundIfFinite(this.smoothNumericMetric("readinessScore", metrics.readinessScore, {
+      alpha: 0.16,
+      maxStep: 0.12,
+      quality: bestFinite(qualityHr, qualityPose, 0.48),
+      minQuality: 0.22
+    }), 2);
+    stable.breathRatePerMin = roundIfFinite(this.smoothNumericMetric("breathRatePerMin", metrics.breathRatePerMin, {
+      alpha: 0.2,
+      maxStep: 0.3,
+      quality: qualityHr,
+      minQuality: 0.15
+    }), 1);
+
+    stable.flaggedZones = this.stabilizeFlaggedZones(
+      Array.isArray(metrics.flaggedZones) ? metrics.flaggedZones : [],
+      qualityPose
+    );
+    stable.cnsFatigue = Number.isFinite(stable.microsaccadeHz)
+      ? stable.microsaccadeHz < 0.5
+      : (this.lastStableMetrics?.cnsFatigue ?? metrics.cnsFatigue ?? null);
+
+    this.lastStableMetrics = stable;
+    return stable;
+  }
+
+  stabilizeFlaggedZones(rawZones, poseQuality) {
+    const seen = new Set();
+    const quality = clamp(Number(poseQuality) || 0, 0, 1);
+    const freezeUpdates = quality > 0 && quality < 0.35;
+
+    if (!freezeUpdates) {
+      for (const zone of rawZones) {
+        if (!zone || !zone.zone || !zone.side) {
+          continue;
+        }
+        const score = Number(zone.score);
+        if (!Number.isFinite(score)) {
+          continue;
+        }
+
+        const key = `${zone.side}:${zone.zone}`;
+        seen.add(key);
+        const current = this.zoneStabilityState.get(key) || {
+          zone: zone.zone,
+          side: zone.side,
+          score,
+          hold: 0,
+          miss: 0
+        };
+
+        current.score = current.score + (score - current.score) * 0.26;
+        current.hold += 1;
+        current.miss = 0;
+        this.zoneStabilityState.set(key, current);
+      }
+    }
+
+    for (const [key, state] of this.zoneStabilityState.entries()) {
+      if (seen.has(key)) {
+        continue;
+      }
+      state.miss += 1;
+      if (!freezeUpdates) {
+        state.hold = Math.max(state.hold - 1, 0);
+        state.score *= 0.92;
+      }
+      if (state.miss > 5 || state.score < 4.5) {
+        this.zoneStabilityState.delete(key);
+      }
+    }
+
+    const stableZones = [];
+    for (const state of this.zoneStabilityState.values()) {
+      if (state.hold < 2 || state.miss > 2) {
+        continue;
+      }
+      if (state.score < SYMMETRY_ALERT_THRESHOLD_PCT - 0.8) {
+        continue;
+      }
+      stableZones.push({
+        zone: state.zone,
+        side: state.side,
+        score: round(state.score, 2)
+      });
+    }
+
+    stableZones.sort((a, b) => b.score - a.score);
+    return stableZones;
+  }
+
+  smoothNumericMetric(key, incoming, options = {}) {
+    const {
+      alpha = 0.2,
+      maxStep = Number.POSITIVE_INFINITY,
+      quality = 1,
+      minQuality = 0
+    } = options;
+
+    const previous = this.metricSmoothers[key];
+    const nextValue = Number(incoming);
+    if (!Number.isFinite(nextValue)) {
+      return Number.isFinite(previous) ? previous : null;
+    }
+
+    if (!Number.isFinite(previous)) {
+      this.metricSmoothers[key] = nextValue;
+      return nextValue;
+    }
+
+    const confidence = clamp(Number(quality), 0, 1);
+    if (confidence < minQuality) {
+      return previous;
+    }
+
+    const dynamicAlpha = clamp(alpha * (0.55 + confidence * 0.7), 0.06, 0.85);
+    const rawDelta = nextValue - previous;
+    if (Number.isFinite(maxStep) && Math.abs(rawDelta) > maxStep * 4 && confidence < 0.55) {
+      return previous;
+    }
+
+    let smoothed = previous + rawDelta * dynamicAlpha;
+    if (Number.isFinite(maxStep)) {
+      const limitedDelta = clamp(smoothed - previous, -maxStep, maxStep);
+      smoothed = previous + limitedDelta;
+    }
+
+    this.metricSmoothers[key] = smoothed;
+    return smoothed;
+  }
+
   capturePpgSample(timestampMs) {
-    const forehead = this.lastFace
+    const faceLandmarks = this.lastFace || this.lastFaceRaw;
+    if (!faceLandmarks) {
+      return;
+    }
+
+    const forehead = faceLandmarks
       .map((landmark, idx) => ({ landmark, idx }))
       .filter((item) => FACEMESH_FOREHEAD.includes(item.idx))
       .map((item) => item.landmark);
@@ -537,28 +920,81 @@ export class AuraScanEngine {
 
     const xs = forehead.map((point) => point.x * this.cameraCanvas.width);
     const ys = forehead.map((point) => point.y * this.cameraCanvas.height);
-    const x = Math.max(0, Math.floor(Math.min(...xs)));
-    const y = Math.max(0, Math.floor(Math.min(...ys)));
-    const w = Math.max(4, Math.floor(Math.max(...xs) - Math.min(...xs)));
-    const h = Math.max(4, Math.floor(Math.max(...ys) - Math.min(...ys)));
+    let x = Math.max(0, Math.floor(Math.min(...xs)));
+    let y = Math.max(0, Math.floor(Math.min(...ys)));
+    let w = Math.max(4, Math.floor(Math.max(...xs) - Math.min(...xs)));
+    let h = Math.max(4, Math.floor(Math.max(...ys) - Math.min(...ys)));
+
+    const roiCenterX = x + w * 0.5;
+    const roiCenterY = y + h * 0.5;
+    let motionPenalty = 0;
+    if (this.foreheadRoiState) {
+      const dx = Math.abs(roiCenterX - this.foreheadRoiState.cx) / Math.max(this.cameraCanvas.width, 1);
+      const dy = Math.abs(roiCenterY - this.foreheadRoiState.cy) / Math.max(this.cameraCanvas.height, 1);
+      const maxShift = Math.max(dx, dy);
+      if (maxShift > 0.18) {
+        // Re-seed the forehead ROI instead of stalling the first few seconds of the scan.
+        this.foreheadRoiState = null;
+        motionPenalty = clamp(maxShift * 1.35, 0.18, 0.5);
+      } else {
+        const alpha = 0.24;
+        motionPenalty = clamp(maxShift * 1.2, 0, 0.2);
+        x = Math.floor(this.foreheadRoiState.x + (x - this.foreheadRoiState.x) * alpha);
+        y = Math.floor(this.foreheadRoiState.y + (y - this.foreheadRoiState.y) * alpha);
+        w = Math.max(4, Math.floor(this.foreheadRoiState.w + (w - this.foreheadRoiState.w) * alpha));
+        h = Math.max(4, Math.floor(this.foreheadRoiState.h + (h - this.foreheadRoiState.h) * alpha));
+      }
+    }
+
+    this.foreheadRoiState = {
+      x,
+      y,
+      w,
+      h,
+      cx: x + w * 0.5,
+      cy: y + h * 0.5
+    };
 
     const img = this.cameraCtx.getImageData(x, y, w, h).data;
 
     let sumR = 0;
     let sumG = 0;
     let sumB = 0;
+    let sumL = 0;
+    let validPixels = 0;
     const pixels = img.length / 4;
 
     for (let i = 0; i < img.length; i += 4) {
-      sumR += img[i];
-      sumG += img[i + 1];
-      sumB += img[i + 2];
+      const r = img[i];
+      const g = img[i + 1];
+      const b = img[i + 2];
+      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const maxC = Math.max(r, g, b);
+      const minC = Math.min(r, g, b);
+      const saturation = (maxC - minC) / Math.max(maxC, 1);
+      if (luminance < 24 || luminance > 245 || saturation < 0.02 || saturation > 0.82) {
+        continue;
+      }
+      sumR += r;
+      sumG += g;
+      sumB += b;
+      sumL += luminance;
+      validPixels += 1;
     }
 
-    const avgR = sumR / pixels;
-    const avgG = sumG / pixels;
-    const avgB = sumB / pixels;
+    if (validPixels < 10 || validPixels < pixels * 0.1) {
+      return;
+    }
+
+    const avgR = sumR / validPixels;
+    const avgG = sumG / validPixels;
+    const avgB = sumB / validPixels;
+    const avgL = sumL / validPixels;
     const mode = estimateSkinMode([avgR, avgG, avgB]);
+    const pixelCoverage = validPixels / pixels;
+    const luminanceScore = clamp(1 - Math.abs(avgL - 135) / 140, 0.2, 1);
+    const motionScore = clamp(1 - motionPenalty, 0.2, 1);
+    const sampleQuality = clamp(pixelCoverage * 0.64 + luminanceScore * 0.24 + motionScore * 0.12, 0, 1);
 
     let sample = avgG;
     if (mode === "pos") {
@@ -570,7 +1006,8 @@ export class AuraScanEngine {
       timestampMs,
       value: sample,
       rgb: [avgR, avgG, avgB],
-      mode
+      mode,
+      quality: sampleQuality
     });
 
     const cutoff = timestampMs - 90_000;
@@ -580,17 +1017,56 @@ export class AuraScanEngine {
   }
 
   captureEyeMotionSample(timestampMs) {
-    if (!this.lastFace) {
+    const faceLandmarks = this.lastFace || this.lastFaceRaw;
+    if (!faceLandmarks) {
       return;
     }
 
-    const left = centroid(this.lastFace, LEFT_EYE_CLUSTER);
-    const right = centroid(this.lastFace, RIGHT_EYE_CLUSTER);
+    const leftIris = centroid(faceLandmarks, LEFT_IRIS_CLUSTER);
+    const rightIris = centroid(faceLandmarks, RIGHT_IRIS_CLUSTER);
+    const leftEyeInner = faceLandmarks[133];
+    const leftEyeOuter = faceLandmarks[33];
+    const rightEyeInner = faceLandmarks[362];
+    const rightEyeOuter = faceLandmarks[263];
+    const leftEyeTop = faceLandmarks[159];
+    const leftEyeBottom = faceLandmarks[145];
+    const rightEyeTop = faceLandmarks[386];
+    const rightEyeBottom = faceLandmarks[374];
 
-    const eyeCenter = {
-      x: (left.x + right.x) / 2,
-      y: (left.y + right.y) / 2
+    const leftBase = centroid(faceLandmarks, LEFT_EYE_CLUSTER);
+    const rightBase = centroid(faceLandmarks, RIGHT_EYE_CLUSTER);
+    if (!leftBase || !rightBase) {
+      return;
+    }
+    const fallbackCenter = {
+      x: (leftBase.x + rightBase.x) / 2,
+      y: (leftBase.y + rightBase.y) / 2
     };
+
+    const leftHorizontalSpan = distance(leftEyeInner, leftEyeOuter) || 0.001;
+    const rightHorizontalSpan = distance(rightEyeInner, rightEyeOuter) || 0.001;
+    const leftVerticalSpan = distance(leftEyeTop, leftEyeBottom) || 0.001;
+    const rightVerticalSpan = distance(rightEyeTop, rightEyeBottom) || 0.001;
+
+    const leftEyeMid = leftEyeInner && leftEyeOuter
+      ? midpoint(leftEyeInner, leftEyeOuter)
+      : leftBase;
+    const rightEyeMid = rightEyeInner && rightEyeOuter
+      ? midpoint(rightEyeInner, rightEyeOuter)
+      : rightBase;
+
+    const leftDx = leftIris && leftEyeMid ? (leftIris.x - leftEyeMid.x) / leftHorizontalSpan : null;
+    const rightDx = rightIris && rightEyeMid ? (rightIris.x - rightEyeMid.x) / rightHorizontalSpan : null;
+    const leftDy = leftIris && leftEyeMid ? (leftIris.y - leftEyeMid.y) / leftVerticalSpan : null;
+    const rightDy = rightIris && rightEyeMid ? (rightIris.y - rightEyeMid.y) / rightVerticalSpan : null;
+
+    const hasIrisTrack = Number.isFinite(leftDx) && Number.isFinite(rightDx) && Number.isFinite(leftDy) && Number.isFinite(rightDy);
+    const eyeCenter = hasIrisTrack
+      ? {
+        x: (leftDx + rightDx) * 0.5,
+        y: (leftDy + rightDy) * 0.5
+      }
+      : fallbackCenter;
 
     this.eyeMotionSamples.push({
       timestampMs,
@@ -605,38 +1081,65 @@ export class AuraScanEngine {
   }
 
   computeMetrics() {
-    if (!this.lastPose || this.ppgSamples.length < 45) {
-      return null;
+    const samples = this.ppgSamples;
+    const hasPpgWindow = samples.length >= 24;
+    let heartRateBpm = null;
+    let rrIntervalMs = null;
+    let hrvRmssdMs = null;
+    let skinMode = "pending";
+
+    if (hasPpgWindow) {
+      const times = samples.map((sample) => sample.timestampMs);
+      const values = samples.map((sample) => sample.value);
+      const durationSec = Math.max((times.at(-1) - times[0]) / 1000, 0.001);
+      const samplingHz = values.length / durationSec;
+
+      const dominantHz = estimateDominantFrequency(values, samplingHz, 0.7, 3.2);
+      heartRateBpm = dominantHz ? dominantHz * 60 : null;
+
+      const rrIntervals = estimateRrIntervalsFromSignal(values, times, 45, 200);
+      this.rrIntervals = rrIntervals;
+
+      rrIntervalMs = mean(rrIntervals);
+      hrvRmssdMs = rmssd(rrIntervals);
+      skinMode = samples.at(-1)?.mode || "green";
+    } else {
+      this.rrIntervals = [];
     }
 
-    const samples = this.ppgSamples;
-    const times = samples.map((sample) => sample.timestampMs);
-    const values = samples.map((sample) => sample.value);
-    const durationSec = Math.max((times.at(-1) - times[0]) / 1000, 0.001);
-    const samplingHz = values.length / durationSec;
+    const wearableFallback = this.estimateWearableFallback();
+    if (!Number.isFinite(heartRateBpm) && Number.isFinite(wearableFallback.heartRateBpm)) {
+      heartRateBpm = wearableFallback.heartRateBpm;
+    }
+    if (!Number.isFinite(rrIntervalMs) && Number.isFinite(wearableFallback.rrIntervalMs)) {
+      rrIntervalMs = wearableFallback.rrIntervalMs;
+    }
+    if (!Number.isFinite(hrvRmssdMs) && Number.isFinite(wearableFallback.hrvRmssdMs)) {
+      hrvRmssdMs = wearableFallback.hrvRmssdMs;
+    }
 
-    const dominantHz = estimateDominantFrequency(values, samplingHz, 0.7, 3.2);
-    const heartRateBpm = dominantHz ? dominantHz * 60 : null;
-
-    const rrIntervals = estimateRrIntervalsFromSignal(values, times, 45, 200);
-    this.rrIntervals = rrIntervals;
-
-    const rrIntervalMs = mean(rrIntervals);
-    const hrvRmssdMs = rmssd(rrIntervals);
-
-    const symmetry = this.computeSymmetry(this.lastPose);
+    const hasPose = Array.isArray(this.lastPose) && this.lastPose.length > 26;
+    const symmetry = hasPose
+      ? this.computeSymmetry(this.lastPose, this.lastPoseWorld)
+      : { deltaPct: null, flaggedZones: [] };
+    this.lastSymmetrySnapshot = symmetry;
     const microsaccadeHz = this.computeMicrosaccadeHz();
+    const poseQuality = hasPose ? this.estimatePoseQuality() : null;
+    const cameraSignalQuality = this.estimatePpgSignalQuality();
+    const motionArtifactScore = this.computeMotionArtifactScore();
 
     const readiness = computeReadinessScore({
       hrvRmssdMs,
       symmetryDeltaPct: symmetry.deltaPct,
       microsaccadeHz
     });
-
-    const skinMode = samples.at(-1)?.mode || "green";
+    const usingWearable = !hasPpgWindow
+      && (Number.isFinite(heartRateBpm) || Number.isFinite(rrIntervalMs) || Number.isFinite(hrvRmssdMs));
+    const vitalsSource = usingWearable ? "wearable-fallback" : "camera-local";
+    const algorithm = usingWearable ? "wearable-fused" : skinMode;
 
     return {
-      algorithm: skinMode,
+      algorithm,
       heartRateBpm: Number.isFinite(heartRateBpm) ? round(heartRateBpm, 1) : null,
       rrIntervalMs: Number.isFinite(rrIntervalMs) ? round(rrIntervalMs, 1) : null,
       hrvRmssdMs: Number.isFinite(hrvRmssdMs) ? round(hrvRmssdMs, 1) : null,
@@ -644,39 +1147,173 @@ export class AuraScanEngine {
       symmetryDeltaPct: Number.isFinite(symmetry.deltaPct) ? round(symmetry.deltaPct, 2) : null,
       flaggedZones: symmetry.flaggedZones,
       readinessScore: Number.isFinite(readiness) ? round(readiness, 2) : null,
-      cnsFatigue: Number.isFinite(microsaccadeHz) ? microsaccadeHz < 0.5 : null
+      cnsFatigue: Number.isFinite(microsaccadeHz) ? microsaccadeHz < 0.5 : null,
+      poseQuality: Number.isFinite(poseQuality) ? round(poseQuality, 3) : null,
+      cameraSignalQuality: Number.isFinite(cameraSignalQuality) ? round(cameraSignalQuality, 3) : null,
+      motionArtifactScore: Number.isFinite(motionArtifactScore) ? round(motionArtifactScore, 3) : null,
+      vitalsSource
     };
   }
 
-  computeSymmetry(poseLandmarks) {
+  buildDegradedSummary() {
+    const wearable = this.estimateWearableFallback();
+    const microsaccadeHz = this.computeMicrosaccadeHz();
+    const poseQuality = this.estimatePoseQuality();
+    const cameraSignalQuality = this.estimatePpgSignalQuality();
+    const motionArtifactScore = this.computeMotionArtifactScore();
+
+    return {
+      algorithm: "degraded-fallback",
+      heartRateBpm: Number.isFinite(wearable.heartRateBpm) ? round(wearable.heartRateBpm, 1) : null,
+      rrIntervalMs: Number.isFinite(wearable.rrIntervalMs) ? round(wearable.rrIntervalMs, 1) : null,
+      hrvRmssdMs: Number.isFinite(wearable.hrvRmssdMs) ? round(wearable.hrvRmssdMs, 1) : null,
+      microsaccadeHz: Number.isFinite(microsaccadeHz) ? round(microsaccadeHz, 3) : null,
+      symmetryDeltaPct: null,
+      flaggedZones: [],
+      readinessScore: null,
+      cnsFatigue: Number.isFinite(microsaccadeHz) ? microsaccadeHz < 0.5 : null,
+      poseQuality: Number.isFinite(poseQuality) ? round(poseQuality, 3) : null,
+      cameraSignalQuality: Number.isFinite(cameraSignalQuality) ? round(cameraSignalQuality, 3) : null,
+      motionArtifactScore: Number.isFinite(motionArtifactScore) ? round(motionArtifactScore, 3) : null,
+      degraded: true
+    };
+  }
+
+  estimateWearableFallback() {
+    const recent = this.wearableSamples.slice(-180);
+    if (!recent.length) {
+      return { heartRateBpm: null, rrIntervalMs: null, hrvRmssdMs: null };
+    }
+
+    const hrValues = recent
+      .map((sample) => Number(sample.heartRateBpm))
+      .filter((value) => Number.isFinite(value) && value >= 35 && value <= 220);
+
+    const rrValues = recent
+      .flatMap((sample) => {
+        const singles = Number.isFinite(Number(sample.rrIntervalMs)) ? [Number(sample.rrIntervalMs)] : [];
+        const arr = Array.isArray(sample.rrIntervalsMs)
+          ? sample.rrIntervalsMs.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+          : [];
+        return [...singles, ...arr];
+      })
+      .filter((value) => value >= 250 && value <= 2200);
+
+    const heartRateBpm = hrValues.length
+      ? (hrValues.reduce((sum, value) => sum + value, 0) / hrValues.length)
+      : null;
+    const rrIntervalMs = rrValues.length
+      ? (rrValues.reduce((sum, value) => sum + value, 0) / rrValues.length)
+      : null;
+
+    let hrvRmssdMs = null;
+    if (rrValues.length >= 2) {
+      let sumSq = 0;
+      let n = 0;
+      for (let i = 1; i < rrValues.length; i += 1) {
+        const diff = rrValues[i] - rrValues[i - 1];
+        sumSq += diff * diff;
+        n += 1;
+      }
+      if (n > 0) {
+        hrvRmssdMs = Math.sqrt(sumSq / n);
+      }
+    }
+
+    return { heartRateBpm, rrIntervalMs, hrvRmssdMs };
+  }
+
+  computeSymmetry(poseLandmarks, poseWorldLandmarks = null) {
+    if (!Array.isArray(poseLandmarks) || poseLandmarks.length < 27) {
+      return {
+        deltaPct: null,
+        flaggedZones: []
+      };
+    }
+
     const leftShoulder = poseLandmarks[11];
     const rightShoulder = poseLandmarks[12];
     const leftHip = poseLandmarks[23];
     const rightHip = poseLandmarks[24];
     const leftKnee = poseLandmarks[25];
     const rightKnee = poseLandmarks[26];
+    const hasWorld = Array.isArray(poseWorldLandmarks) && poseWorldLandmarks.length > 26;
 
     const pairs = [
-      { name: "shoulder", left: leftShoulder, right: rightShoulder },
-      { name: "hip", left: leftHip, right: rightHip },
-      { name: "knee", left: leftKnee, right: rightKnee }
+      { name: "shoulder", left: leftShoulder, right: rightShoulder, leftIdx: 11, rightIdx: 12 },
+      { name: "hip", left: leftHip, right: rightHip, leftIdx: 23, rightIdx: 24 },
+      { name: "knee", left: leftKnee, right: rightKnee, leftIdx: 25, rightIdx: 26 }
     ];
 
     const deltas = [];
     const flagged = [];
+    const pairDeltas = [];
+    let torsoScale = 0;
+    const shoulderSpan2d = distance(leftShoulder, rightShoulder);
+    const hipSpan2d = distance(leftHip, rightHip);
+    const pixelScale = Math.max(
+      Number.isFinite(shoulderSpan2d) ? shoulderSpan2d : 0,
+      Number.isFinite(hipSpan2d) ? hipSpan2d : 0,
+      0.08
+    );
+
+    if (hasWorld) {
+      const wsL = poseWorldLandmarks[11];
+      const wsR = poseWorldLandmarks[12];
+      const whL = poseWorldLandmarks[23];
+      const whR = poseWorldLandmarks[24];
+      const shoulderSpan = distance3d(wsL, wsR);
+      const hipSpan = distance3d(whL, whR);
+      torsoScale = Math.max((shoulderSpan + hipSpan) * 0.5, 0.06);
+    }
 
     for (const pair of pairs) {
       if (!pair.left || !pair.right) {
         continue;
       }
 
-      const yDelta = Math.abs(pair.left.y - pair.right.y);
-      const xSpan = Math.abs(pair.left.x - pair.right.x) || 0.001;
-      const pct = (yDelta / xSpan) * 100;
-      deltas.push(pct);
+      const leftVisible = !Number.isFinite(pair.left.visibility) || pair.left.visibility >= MIN_SYMMETRY_VISIBILITY;
+      const rightVisible = !Number.isFinite(pair.right.visibility) || pair.right.visibility >= MIN_SYMMETRY_VISIBILITY;
+      if (!leftVisible || !rightVisible) {
+        continue;
+      }
 
-      if (pct > 6) {
-        const side = pair.left.y > pair.right.y ? "left" : "right";
+      let pct;
+      let signedDelta;
+      if (hasWorld) {
+        const wl = poseWorldLandmarks[pair.leftIdx];
+        const wr = poseWorldLandmarks[pair.rightIdx];
+        if (isFinitePoint3d(wl) && isFinitePoint3d(wr) && torsoScale > 0) {
+          const yzDelta = Math.hypot(wl.y - wr.y, wl.z - wr.z);
+          pct = (yzDelta / torsoScale) * 100;
+          signedDelta = wl.y - wr.y;
+        }
+      }
+
+      if (!Number.isFinite(pct)) {
+        const yDelta = Math.abs(pair.left.y - pair.right.y);
+        pct = (yDelta / pixelScale) * 100;
+        signedDelta = pair.left.y - pair.right.y;
+      }
+
+      const state = this.symmetryPairState.get(pair.name) || {};
+      const prevPct = Number(state.pct);
+      const smoothedPct = Number.isFinite(prevPct)
+        ? prevPct + (pct - prevPct) * 0.24
+        : pct;
+      state.pct = smoothedPct;
+      this.symmetryPairState.set(pair.name, state);
+
+      const side = this.resolveSymmetrySide(pair.name, signedDelta);
+      pct = smoothedPct;
+      deltas.push(pct);
+      pairDeltas.push({
+        zone: pair.name,
+        side,
+        pct: round(pct, 2)
+      });
+
+      if (pct > SYMMETRY_ALERT_THRESHOLD_PCT) {
         flagged.push({
           zone: pair.name,
           side,
@@ -687,8 +1324,85 @@ export class AuraScanEngine {
 
     return {
       deltaPct: deltas.length ? deltas.reduce((sum, value) => sum + value, 0) / deltas.length : null,
-      flaggedZones: flagged
+      flaggedZones: flagged,
+      pairDeltas
     };
+  }
+
+  resolveSymmetrySide(pairName, signedDelta) {
+    const delta = Number(signedDelta);
+    if (!Number.isFinite(delta)) {
+      return this.symmetryPairState.get(pairName)?.side || "left";
+    }
+
+    const state = this.symmetryPairState.get(pairName) || {};
+    const prevDelta = Number(state.sideDelta);
+    const blended = Number.isFinite(prevDelta)
+      ? prevDelta + (delta - prevDelta) * 0.28
+      : delta;
+    const deadband = 0.0045;
+
+    let side = state.side || (blended >= 0 ? "left" : "right");
+    if (Math.abs(blended) >= deadband) {
+      side = blended >= 0 ? "left" : "right";
+    }
+
+    state.side = side;
+    state.sideDelta = blended;
+    this.symmetryPairState.set(pairName, state);
+    return side;
+  }
+
+  smoothLandmarks2d(currentLandmarks, previousLandmarks, alpha = 0.35) {
+    if (!Array.isArray(currentLandmarks)) {
+      return previousLandmarks || null;
+    }
+    if (!Array.isArray(previousLandmarks) || previousLandmarks.length !== currentLandmarks.length) {
+      return currentLandmarks.map((point) => ({ ...point }));
+    }
+
+    const a = clamp(alpha, 0.05, 0.95);
+    return currentLandmarks.map((point, index) => {
+      const prev = previousLandmarks[index];
+      if (!point || !prev) {
+        return point ? { ...point } : prev;
+      }
+      return {
+        ...point,
+        x: prev.x + (point.x - prev.x) * a,
+        y: prev.y + (point.y - prev.y) * a,
+        z: Number.isFinite(point.z) && Number.isFinite(prev.z) ? (prev.z + (point.z - prev.z) * a) : point.z,
+        visibility: Number.isFinite(point.visibility) && Number.isFinite(prev.visibility)
+          ? (prev.visibility + (point.visibility - prev.visibility) * a)
+          : point.visibility
+      };
+    });
+  }
+
+  smoothLandmarks3d(currentLandmarks, previousLandmarks, alpha = 0.28) {
+    if (!Array.isArray(currentLandmarks)) {
+      return previousLandmarks || null;
+    }
+    if (!Array.isArray(previousLandmarks) || previousLandmarks.length !== currentLandmarks.length) {
+      return currentLandmarks.map((point) => ({ ...point }));
+    }
+
+    const a = clamp(alpha, 0.05, 0.95);
+    return currentLandmarks.map((point, index) => {
+      const prev = previousLandmarks[index];
+      if (!point || !prev) {
+        return point ? { ...point } : prev;
+      }
+      return {
+        ...point,
+        x: prev.x + (point.x - prev.x) * a,
+        y: prev.y + (point.y - prev.y) * a,
+        z: prev.z + (point.z - prev.z) * a,
+        visibility: Number.isFinite(point.visibility) && Number.isFinite(prev.visibility)
+          ? (prev.visibility + (point.visibility - prev.visibility) * a)
+          : point.visibility
+      };
+    });
   }
 
   computeMicrosaccadeHz() {
@@ -717,7 +1431,100 @@ export class AuraScanEngine {
     return burstCount / spanSec;
   }
 
+  estimatePoseQuality() {
+    if (!Array.isArray(this.lastPose) || this.lastPose.length < 29) {
+      return null;
+    }
+
+    const visibilities = POSE_QUALITY_POINTS
+      .map((idx) => this.lastPose[idx]?.visibility)
+      .filter((value) => Number.isFinite(value));
+
+    if (!visibilities.length) {
+      return null;
+    }
+
+    return clamp(visibilities.reduce((sum, value) => sum + value, 0) / visibilities.length, 0, 1);
+  }
+
+  estimatePpgSignalQuality() {
+    const recent = this.ppgSamples.slice(-150);
+    if (!recent.length) {
+      return null;
+    }
+
+    const validFraction = recent
+      .map((sample) => Number(sample.quality))
+      .filter((value) => Number.isFinite(value));
+    const meanQuality = validFraction.length
+      ? validFraction.reduce((sum, value) => sum + value, 0) / validFraction.length
+      : 0;
+
+    const values = recent.map((sample) => sample.value).filter((value) => Number.isFinite(value));
+    if (values.length < 8) {
+      return clamp(meanQuality, 0, 1);
+    }
+
+    const meanValue = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const variance = values.reduce((sum, value) => sum + ((value - meanValue) ** 2), 0) / values.length;
+    const std = Math.sqrt(variance);
+    const signalScore = clamp(std / 2.2, 0, 1);
+
+    return clamp((meanQuality * 0.65) + (signalScore * 0.35), 0, 1);
+  }
+
+  computeMotionArtifactScore() {
+    const samples = this.eyeMotionSamples.slice(-90);
+    if (samples.length < 4) {
+      return null;
+    }
+
+    const speeds = [];
+    for (let i = 1; i < samples.length; i += 1) {
+      const dt = Math.max((samples[i].timestampMs - samples[i - 1].timestampMs) / 1000, 0.001);
+      const dx = samples[i].x - samples[i - 1].x;
+      const dy = samples[i].y - samples[i - 1].y;
+      speeds.push(Math.sqrt(dx * dx + dy * dy) / dt);
+    }
+
+    if (!speeds.length) {
+      return null;
+    }
+
+    const meanSpeed = speeds.reduce((sum, value) => sum + value, 0) / speeds.length;
+    return clamp(meanSpeed / 2.4, 0, 1);
+  }
+
+  ingestWearableSample(sample = {}) {
+    const timestampMs = Number(sample.timestampMs ?? performance.now());
+    if (!Number.isFinite(timestampMs)) {
+      return;
+    }
+
+    const frame = {
+      timestampMs,
+      heartRateBpm: asFinite(sample.heartRateBpm),
+      rrIntervalMs: asFinite(sample.rrIntervalMs),
+      rrIntervalsMs: Array.isArray(sample.rrIntervalsMs)
+        ? sample.rrIntervalsMs.map((value) => asFinite(value)).filter((value) => value !== null)
+        : [],
+      confidence: asFinite(sample.confidence),
+      source: typeof sample.source === "string" && sample.source.trim() ? sample.source.trim() : "wearable"
+    };
+
+    if (!Number.isFinite(frame.heartRateBpm) && !Number.isFinite(frame.rrIntervalMs) && !frame.rrIntervalsMs.length) {
+      return;
+    }
+
+    this.wearableSamples.push(frame);
+    const cutoff = timestampMs - 180_000;
+    while (this.wearableSamples.length && this.wearableSamples[0].timestampMs < cutoff) {
+      this.wearableSamples.shift();
+    }
+  }
+
   drawPose(landmarks, ctx, width, height, color, lineWidth = 2) {
+    const minVisibility = 0.15;
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
 
@@ -725,6 +1532,12 @@ export class AuraScanEngine {
       const p1 = landmarks[a];
       const p2 = landmarks[b];
       if (!p1 || !p2) {
+        continue;
+      }
+      if (Number.isFinite(p1.visibility) && p1.visibility < minVisibility) {
+        continue;
+      }
+      if (Number.isFinite(p2.visibility) && p2.visibility < minVisibility) {
         continue;
       }
 
@@ -736,9 +1549,19 @@ export class AuraScanEngine {
 
     ctx.fillStyle = color;
     for (const point of landmarks) {
+      if (!point) {
+        continue;
+      }
+      if (Number.isFinite(point.visibility) && point.visibility < minVisibility) {
+        continue;
+      }
+      const px = point.x * width;
+      const py = point.y * height;
+      ctx.globalAlpha = Number.isFinite(point.visibility) ? clamp(point.visibility, 0.3, 1) : 0.92;
       ctx.beginPath();
-      ctx.arc(point.x * width, point.y * height, 2.2, 0, Math.PI * 2);
+      ctx.arc(px, py, 3.1, 0, Math.PI * 2);
       ctx.fill();
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -774,6 +1597,9 @@ export class AuraScanEngine {
     const ctx = this.bodyMapCtx;
     const width = this.bodyMapCanvas.width;
     const height = this.bodyMapCanvas.height;
+    if (!ctx || !width || !height) {
+      return;
+    }
 
     ctx.clearRect(0, 0, width, height);
 
@@ -783,35 +1609,223 @@ export class AuraScanEngine {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, width, height);
 
-    const mapPose = buildCanonicalPose(width, height);
+    this.syncBodyHeatBufferSize(width, height);
+    const sprite = this.computeBodySpriteRect(width, height);
+    const mapPose = this.buildBodyPoseFromSprite(sprite) || buildCanonicalPose(width, height);
+
     if (this.bodySilhouetteLoaded && this.bodySilhouetteImage.naturalWidth > 0) {
-      const spriteHeight = height * 0.9;
-      const spriteWidth = spriteHeight * 0.42;
-      const x = (width - spriteWidth) * 0.5;
-      const y = height * 0.05;
       ctx.save();
-      ctx.globalAlpha = 0.84;
-      ctx.drawImage(this.bodySilhouetteImage, x, y, spriteWidth, spriteHeight);
-      ctx.globalCompositeOperation = "source-atop";
-      ctx.fillStyle = "rgba(194, 198, 203, 0.62)";
-      ctx.fillRect(x, y, spriteWidth, spriteHeight);
+      ctx.globalAlpha = 0.97;
+      ctx.drawImage(this.bodySilhouetteImage, sprite.x, sprite.y, sprite.width, sprite.height);
       ctx.restore();
-    } else {
-      drawAnatomyFigure(ctx, mapPose, {
-        alpha: 1,
-        bodyFill: "rgba(186, 190, 194, 0.88)",
-        bodyStroke: "rgba(248, 250, 252, 0.42)",
-        detailStroke: "rgba(250, 251, 252, 0.38)"
-      });
     }
 
-    const zones = this.lastMetrics?.flaggedZones || [];
-    for (const zone of zones) {
-      drawZoneHighlight(ctx, mapPose, zone.zone, zone.side, zone.score, {
-        showLabel: true,
-        baseRadius: 12
-      });
+    const zones = this.resolveBodyMapZones();
+    this.drawMaskedBodyHeat(ctx, zones, mapPose, sprite);
+    this.drawImpactMarkers(ctx, zones, mapPose, width, height);
+  }
+
+  resolveBodyMapZones() {
+    const flaggedZones = Array.isArray(this.lastMetrics?.flaggedZones)
+      ? this.lastMetrics.flaggedZones.filter((zone) => Number.isFinite(Number(zone?.score)))
+      : [];
+
+    if (flaggedZones.length) {
+      return flaggedZones;
     }
+
+    const pairs = Array.isArray(this.lastSymmetrySnapshot?.pairDeltas)
+      ? this.lastSymmetrySnapshot.pairDeltas
+      : [];
+
+    if (!pairs.length) {
+      return [];
+    }
+
+    return pairs
+      .filter((pair) => Number.isFinite(Number(pair?.pct)))
+      .sort((a, b) => Number(b.pct) - Number(a.pct))
+      .slice(0, 3)
+      .map((pair) => ({
+        zone: pair.zone,
+        side: pair.side,
+        score: round(clamp(Number(pair.pct) * 1.35, 2.6, 18), 2)
+      }));
+  }
+
+  syncBodyHeatBufferSize(width, height) {
+    if (!this.bodyHeatCanvas || !this.bodyHeatCtx) {
+      return;
+    }
+    if (this.bodyHeatCanvas.width !== width) {
+      this.bodyHeatCanvas.width = width;
+    }
+    if (this.bodyHeatCanvas.height !== height) {
+      this.bodyHeatCanvas.height = height;
+    }
+  }
+
+  computeBodySpriteRect(width, height) {
+    const imageRatio = this.bodySilhouetteLoaded && this.bodySilhouetteImage?.naturalWidth > 0
+      ? this.bodySilhouetteImage.naturalWidth / Math.max(this.bodySilhouetteImage.naturalHeight, 1)
+      : 0.42;
+    let spriteHeight = height * 0.93;
+    let spriteWidth = spriteHeight * imageRatio;
+    const maxWidth = width * 0.82;
+    if (spriteWidth > maxWidth) {
+      spriteWidth = maxWidth;
+      spriteHeight = spriteWidth / Math.max(imageRatio, 0.001);
+    }
+
+    return {
+      x: (width - spriteWidth) * 0.5,
+      y: height * 0.032,
+      width: spriteWidth,
+      height: spriteHeight
+    };
+  }
+
+  buildBodyPoseFromSprite(sprite) {
+    if (!sprite) {
+      return null;
+    }
+    const pt = (fx, fy) => ({
+      x: sprite.x + sprite.width * fx,
+      y: sprite.y + sprite.height * fy
+    });
+
+    const pose = {
+      leftShoulder: pt(0.338, 0.255),
+      rightShoulder: pt(0.662, 0.255),
+      leftElbow: pt(0.286, 0.458),
+      rightElbow: pt(0.714, 0.458),
+      leftWrist: pt(0.225, 0.64),
+      rightWrist: pt(0.775, 0.64),
+      leftHip: pt(0.432, 0.555),
+      rightHip: pt(0.568, 0.555),
+      leftKnee: pt(0.432, 0.79),
+      rightKnee: pt(0.568, 0.79),
+      leftAnkle: pt(0.432, 0.955),
+      rightAnkle: pt(0.568, 0.955)
+    };
+    const shoulderCenter = midpoint(pose.leftShoulder, pose.rightShoulder);
+    const hipCenter = midpoint(pose.leftHip, pose.rightHip);
+    return {
+      ...pose,
+      shoulderCenter,
+      hipCenter,
+      torsoCenter: midpoint(shoulderCenter, hipCenter)
+    };
+  }
+
+  drawMaskedBodyHeat(ctx, zones, mapPose, sprite) {
+    if (!ctx
+      || !this.bodyHeatCtx
+      || !this.bodySilhouetteLoaded
+      || !this.bodySilhouetteImage?.naturalWidth
+      || !Array.isArray(zones)
+      || !zones.length) {
+      return;
+    }
+
+    const heatCtx = this.bodyHeatCtx;
+    const width = this.bodyHeatCanvas.width;
+    const height = this.bodyHeatCanvas.height;
+    heatCtx.clearRect(0, 0, width, height);
+
+    const rankedZones = [...zones]
+      .filter((zone) => Number.isFinite(Number(zone?.score)))
+      .sort((a, b) => Number(b.score) - Number(a.score))
+      .slice(0, 8);
+
+    for (const zone of rankedZones) {
+      const anchor = this.resolveBodyZoneAnchor(zone, mapPose);
+      if (!anchor) {
+        continue;
+      }
+
+      const severity = clamp(Number(zone.score) / 20, 0.12, 1);
+      const radius = 14 + severity * 22;
+      const isHot = Number(zone.score) >= 12;
+      const inner = isHot ? "rgba(247, 111, 61, 0.82)" : "rgba(244, 188, 81, 0.74)";
+      const outer = isHot ? "rgba(247, 111, 61, 0.0)" : "rgba(244, 188, 81, 0.0)";
+
+      const g = heatCtx.createRadialGradient(anchor.x, anchor.y, radius * 0.12, anchor.x, anchor.y, radius);
+      g.addColorStop(0, inner);
+      g.addColorStop(1, outer);
+      heatCtx.fillStyle = g;
+      heatCtx.beginPath();
+      heatCtx.ellipse(anchor.x, anchor.y, radius * 0.95, radius * 1.14, 0, 0, Math.PI * 2);
+      heatCtx.fill();
+    }
+
+    heatCtx.globalCompositeOperation = "destination-in";
+    heatCtx.drawImage(this.bodySilhouetteImage, sprite.x, sprite.y, sprite.width, sprite.height);
+    heatCtx.globalCompositeOperation = "source-over";
+
+    ctx.save();
+    ctx.globalAlpha = 0.78;
+    ctx.drawImage(this.bodyHeatCanvas, 0, 0, width, height);
+    ctx.restore();
+  }
+
+  drawImpactMarkers(ctx, zones, mapPose, width, height) {
+    if (!ctx || !Array.isArray(zones) || !zones.length) {
+      return;
+    }
+
+    const now = performance.now() * 0.001;
+    const rankedZones = [...zones]
+      .filter((zone) => Number.isFinite(Number(zone?.score)))
+      .sort((a, b) => Number(b.score) - Number(a.score))
+      .slice(0, 6);
+
+    ctx.save();
+    ctx.font = "600 10px JetBrains Mono";
+    rankedZones.forEach((zone, idx) => {
+      const anchor = this.resolveBodyZoneAnchor(zone, mapPose);
+      if (!anchor) {
+        return;
+      }
+
+      const score = Number(zone.score);
+      const severity = clamp(score / 20, 0.1, 1);
+      const pulse = 1 + Math.sin(now * 4.8 + idx * 0.85) * 0.08;
+      const radius = (9 + severity * 8) * pulse;
+      const hot = score >= 12;
+      const ringColor = hot ? "rgba(255, 132, 88, 0.92)" : "rgba(255, 211, 102, 0.9)";
+      const coreColor = hot ? "rgba(255, 118, 72, 0.95)" : "rgba(255, 194, 88, 0.95)";
+
+      ctx.strokeStyle = ringColor;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(anchor.x, anchor.y, radius * 1.22, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(220, 244, 255, 0.72)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(anchor.x, anchor.y, radius * 0.72, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = coreColor;
+      ctx.beginPath();
+      ctx.arc(anchor.x, anchor.y, radius * 0.36, 0, Math.PI * 2);
+      ctx.fill();
+
+      const label = `${zone.side} ${zone.zone} ${Math.round(score)}%`;
+      const tw = ctx.measureText(label).width;
+      const bx = clamp(anchor.x - tw * 0.5 - 6, 4, width - tw - 16);
+      const by = clamp(anchor.y - radius * 1.35 - 16, 4, height - 20);
+      ctx.fillStyle = "rgba(10, 29, 44, 0.84)";
+      ctx.strokeStyle = "rgba(176, 227, 245, 0.52)";
+      roundRect(ctx, bx, by, tw + 12, 14, 6);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#f3ede1";
+      ctx.fillText(label, bx + 6, by + 10.4);
+    });
+    ctx.restore();
   }
 
   drawBodyZonePatch(zone, mapPose) {
@@ -1037,6 +2051,10 @@ export class AuraScanEngine {
     return this.lastPose;
   }
 
+  getLatestPoseWorldLandmarks() {
+    return this.lastPoseWorld;
+  }
+
   getLatestMetrics() {
     return this.lastMetrics;
   }
@@ -1058,9 +2076,13 @@ function centroid(faceLandmarks, indexes) {
     n += 1;
   }
 
+  if (!n) {
+    return null;
+  }
+
   return {
-    x: n ? x / n : 0,
-    y: n ? y / n : 0
+    x: x / n,
+    y: y / n
   };
 }
 
@@ -1071,6 +2093,23 @@ function distance(a, b) {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
   return Math.sqrt(dx * dx + dy * dy);
+}
+
+function distance3d(a, b) {
+  if (!isFinitePoint3d(a) || !isFinitePoint3d(b)) {
+    return 0;
+  }
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+function isFinitePoint3d(point) {
+  return !!point
+    && Number.isFinite(point.x)
+    && Number.isFinite(point.y)
+    && Number.isFinite(point.z);
 }
 
 function midpoint(a, b) {
@@ -1139,4 +2178,77 @@ function generateSessionId() {
 function asFinite(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function bestFinite(...values) {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function roundIfFinite(value, digits) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? round(parsed, digits) : null;
+}
+
+const scriptLoadCache = new Map();
+
+async function ensureMediaPipeGlobal(globalName, candidates = []) {
+  if (typeof window !== "undefined" && window[globalName]) {
+    return candidates[0] || null;
+  }
+
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      await loadScriptOnce(candidate.script);
+      if (typeof window !== "undefined" && window[globalName]) {
+        return candidate;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error(`MediaPipe dependency "${globalName}" could not be loaded.`);
+}
+
+function loadScriptOnce(src) {
+  if (!src) {
+    return Promise.reject(new Error("Script source is required."));
+  }
+
+  const absoluteSrc = new URL(src, window.location.href).href;
+  const cached = scriptLoadCache.get(absoluteSrc);
+  if (cached) {
+    return cached;
+  }
+
+  const promise = new Promise((resolve, reject) => {
+    const existing = [...document.getElementsByTagName("script")]
+      .find((script) => script.src === absoluteSrc);
+    if (existing) {
+      resolve(existing);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = absoluteSrc;
+    script.async = false;
+    script.onload = () => {
+      resolve(script);
+    };
+    script.onerror = () => {
+      scriptLoadCache.delete(absoluteSrc);
+      reject(new Error(`Failed to load script: ${src}`));
+    };
+    document.head.appendChild(script);
+  });
+
+  scriptLoadCache.set(absoluteSrc, promise);
+  return promise;
 }

@@ -19,12 +19,23 @@ class PpgSample(BaseModel):
     timestamp_ms: float
     value: float
     mode: str | None = "green"
+    rgb: list[float] = Field(default_factory=list)
+    quality: float | None = None
 
 
 class EyeSample(BaseModel):
     timestamp_ms: float
     x: float
     y: float
+
+
+class WearableSample(BaseModel):
+    timestamp_ms: float
+    heart_rate_bpm: float | None = None
+    rr_interval_ms: float | None = None
+    rr_intervals_ms: list[float] = Field(default_factory=list)
+    confidence: float | None = None
+    source: str | None = None
 
 
 class PoseSummary(BaseModel):
@@ -38,6 +49,7 @@ class AnalyzeRequest(BaseModel):
     scan_duration_sec: float = 60.0
     ppg_samples: list[PpgSample] = Field(default_factory=list)
     eye_samples: list[EyeSample] = Field(default_factory=list)
+    wearable_samples: list[WearableSample] = Field(default_factory=list)
     pose_summary: PoseSummary = Field(default_factory=PoseSummary)
     local_metrics: dict[str, Any] | None = None
 
@@ -122,6 +134,7 @@ async def aura_analyze(payload: AnalyzeRequest) -> dict[str, Any]:
     update_state(state, {
       "ppg_samples": [sample.model_dump() for sample in payload.ppg_samples],
       "eye_samples": [sample.model_dump() for sample in payload.eye_samples],
+      "wearable_samples": [sample.model_dump() for sample in payload.wearable_samples],
       "pose_summary": payload.pose_summary.model_dump()
     })
 

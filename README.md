@@ -104,3 +104,4 @@ Python service endpoints:
 ## Notes
 - Wellness support software only, not diagnostic software.
 - HydraWav publish payload must be a JSON string.
+- Movement preview panel uses real exercise GIF demos from `src/assets/movements/demos/` (see `SOURCE.md`).

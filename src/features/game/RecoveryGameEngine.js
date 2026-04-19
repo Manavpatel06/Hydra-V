@@ -1,11 +1,21 @@
 import { clamp } from "../../core/utils.js";
 import {
-  buildPoseFromLandmarks,
-  drawAnatomyFigure,
-  drawZoneHighlight
+  drawAnatomyFigure
 } from "../visual/AnatomyFigureRenderer.js";
+import { buildZoneActions, amplitudeTarget } from "./ExercisePlanner.js";
 
 const BODY_SILHOUETTE_URL = "/src/assets/anatomy-silhouette.svg";
+const MOVEMENT_PREVIEW_URLS = Object.freeze({
+  raise: "/src/assets/movements/demos/raise.gif",
+  cross: "/src/assets/movements/demos/cross.gif",
+  "elbow-drive": "/src/assets/movements/demos/elbow-drive.gif",
+  march: "/src/assets/movements/demos/march.gif",
+  "side-step": "/src/assets/movements/demos/side-step.gif",
+  hinge: "/src/assets/movements/demos/hinge.gif",
+  "mini-squat": "/src/assets/movements/demos/mini-squat.gif",
+  "step-lift": "/src/assets/movements/demos/step-lift.gif",
+  extension: "/src/assets/movements/demos/extension.gif"
+});
 
 function getSideIndexes(side) {
   return side === "right"
@@ -13,242 +23,29 @@ function getSideIndexes(side) {
     : { shoulder: 11, elbow: 13, wrist: 15, hip: 23, knee: 25, ankle: 27 };
 }
 
-function angleDeg(a, b, c) {
-  if (!a || !b || !c) {
-    return null;
-  }
-
-  const abx = a.x - b.x;
-  const aby = a.y - b.y;
-  const cbx = c.x - b.x;
-  const cby = c.y - b.y;
-
-  const dot = abx * cbx + aby * cby;
-  const mag1 = Math.sqrt(abx * abx + aby * aby) || 1;
-  const mag2 = Math.sqrt(cbx * cbx + cby * cby) || 1;
-  const cos = clamp(dot / (mag1 * mag2), -1, 1);
-  return Math.acos(cos) * (180 / Math.PI);
-}
-
-function createShoulderActions(side) {
+function getActionTrackingIndexes(actionId, side) {
   const i = getSideIndexes(side);
-  return [
-    {
-      id: "raise",
-      label: "Sky Reach",
-      description: "Lift wrist above shoulder and return with control.",
-      repsTarget: 8,
-      sample(landmarks) {
-        const shoulder = landmarks[i.shoulder];
-        const wrist = landmarks[i.wrist];
-        if (!shoulder || !wrist) {
-          return null;
-        }
-        const delta = shoulder.y - wrist.y;
-        return {
-          up: delta > 0.04,
-          down: delta < -0.015,
-          amplitude: Math.abs(delta)
-        };
-      }
-    },
-    {
-      id: "cross",
-      label: "Cross Reach",
-      description: "Reach across midline and return.",
-      repsTarget: 6,
-      sample(landmarks) {
-        const shoulder = landmarks[i.shoulder];
-        const wrist = landmarks[i.wrist];
-        const oppositeShoulder = landmarks[side === "right" ? 11 : 12];
-        if (!shoulder || !wrist || !oppositeShoulder) {
-          return null;
-        }
-        const midline = (shoulder.x + oppositeShoulder.x) / 2;
-        const crossed = side === "right" ? wrist.x < midline : wrist.x > midline;
-        const neutral = side === "right" ? wrist.x > shoulder.x - 0.02 : wrist.x < shoulder.x + 0.02;
-        const amplitude = Math.abs(wrist.x - midline);
-        return {
-          up: crossed,
-          down: neutral,
-          amplitude
-        };
-      }
-    },
-    {
-      id: "elbow-drive",
-      label: "Elbow Drive",
-      description: "Drive elbow back, then release to neutral.",
-      repsTarget: 8,
-      sample(landmarks) {
-        const shoulder = landmarks[i.shoulder];
-        const elbow = landmarks[i.elbow];
-        if (!shoulder || !elbow) {
-          return null;
-        }
-        const drive = side === "right" ? (elbow.x - shoulder.x) > 0.07 : (shoulder.x - elbow.x) > 0.07;
-        const neutral = Math.abs(elbow.x - shoulder.x) < 0.04;
-        const amplitude = Math.abs(elbow.x - shoulder.x);
-        return {
-          up: drive,
-          down: neutral,
-          amplitude
-        };
-      }
-    }
-  ];
-}
+  const opposite = getSideIndexes(side === "right" ? "left" : "right");
 
-function createHipActions(side) {
-  const i = getSideIndexes(side);
-  return [
-    {
-      id: "march",
-      label: "Power March",
-      description: "Lift knee above hip and return.",
-      repsTarget: 10,
-      sample(landmarks) {
-        const hip = landmarks[i.hip];
-        const knee = landmarks[i.knee];
-        if (!hip || !knee) {
-          return null;
-        }
-        const lift = hip.y - knee.y;
-        return {
-          up: lift > 0.03,
-          down: lift < -0.01,
-          amplitude: Math.abs(lift)
-        };
-      }
-    },
-    {
-      id: "side-step",
-      label: "Side Step",
-      description: "Move ankle away from hip and return.",
-      repsTarget: 8,
-      sample(landmarks) {
-        const hip = landmarks[i.hip];
-        const ankle = landmarks[i.ankle];
-        if (!hip || !ankle) {
-          return null;
-        }
-        const lateral = Math.abs(ankle.x - hip.x);
-        return {
-          up: lateral > 0.13,
-          down: lateral < 0.08,
-          amplitude: lateral
-        };
-      }
-    },
-    {
-      id: "hinge",
-      label: "Hip Hinge",
-      description: "Small hinge and return tall posture.",
-      repsTarget: 8,
-      sample(landmarks) {
-        const shoulder = landmarks[i.shoulder];
-        const hip = landmarks[i.hip];
-        if (!shoulder || !hip) {
-          return null;
-        }
-        const forward = Math.abs(shoulder.x - hip.x);
-        return {
-          up: forward > 0.1,
-          down: forward < 0.06,
-          amplitude: forward
-        };
-      }
-    }
-  ];
-}
-
-function createKneeActions(side) {
-  const i = getSideIndexes(side);
-  return [
-    {
-      id: "mini-squat",
-      label: "Mini Squat",
-      description: "Lower into mini squat and stand tall.",
-      repsTarget: 8,
-      sample(landmarks) {
-        const hip = landmarks[i.hip];
-        const knee = landmarks[i.knee];
-        const ankle = landmarks[i.ankle];
-        const angle = angleDeg(hip, knee, ankle);
-        if (!Number.isFinite(angle)) {
-          return null;
-        }
-        return {
-          up: angle < 125,
-          down: angle > 155,
-          amplitude: clamp((170 - angle) / 60, 0, 1)
-        };
-      }
-    },
-    {
-      id: "step-lift",
-      label: "Step Lift",
-      description: "Lift ankle, then place down softly.",
-      repsTarget: 10,
-      sample(landmarks) {
-        const ankle = landmarks[i.ankle];
-        const oppositeAnkle = landmarks[side === "right" ? 27 : 28];
-        if (!ankle || !oppositeAnkle) {
-          return null;
-        }
-        const lift = oppositeAnkle.y - ankle.y;
-        return {
-          up: lift > 0.035,
-          down: lift < 0.01,
-          amplitude: Math.abs(lift)
-        };
-      }
-    },
-    {
-      id: "extension",
-      label: "Knee Extension",
-      description: "Extend leg forward, then return.",
-      repsTarget: 8,
-      sample(landmarks) {
-        const knee = landmarks[i.knee];
-        const ankle = landmarks[i.ankle];
-        if (!knee || !ankle) {
-          return null;
-        }
-        const extension = Math.abs(ankle.x - knee.x);
-        return {
-          up: extension > 0.12,
-          down: extension < 0.07,
-          amplitude: extension
-        };
-      }
-    }
-  ];
-}
-
-function actionsForZone(zone, side) {
-  if (zone === "hip") {
-    return createHipActions(side);
+  if (actionId === "raise" || actionId === "elbow-drive") {
+    return [i.shoulder, i.elbow, i.wrist];
   }
-  if (zone === "knee") {
-    return createKneeActions(side);
+  if (actionId === "cross") {
+    return [i.shoulder, i.elbow, i.wrist, opposite.shoulder];
   }
-  return createShoulderActions(side);
-}
-
-function amplitudeTarget(actionId) {
-  const map = {
-    raise: 0.2,
-    cross: 0.16,
-    "elbow-drive": 0.12,
-    march: 0.17,
-    "side-step": 0.16,
-    hinge: 0.12,
-    "mini-squat": 0.9,
-    "step-lift": 0.1,
-    extension: 0.14
-  };
-  return map[actionId] || 0.15;
+  if (actionId === "march" || actionId === "side-step") {
+    return [i.hip, i.knee, i.ankle];
+  }
+  if (actionId === "hinge") {
+    return [i.shoulder, i.hip, opposite.shoulder, opposite.hip];
+  }
+  if (actionId === "mini-squat" || actionId === "extension") {
+    return [i.hip, i.knee, i.ankle];
+  }
+  if (actionId === "step-lift") {
+    return [i.hip, i.knee, i.ankle, opposite.ankle];
+  }
+  return [i.shoulder, i.elbow, i.wrist, i.hip, i.knee, i.ankle];
 }
 
 function cloneLandmarks(landmarks) {
@@ -279,6 +76,7 @@ export class RecoveryGameEngine {
   constructor({
     getPoseLandmarks,
     getBiometrics = null,
+    getPlannerContext = null,
     overlayCanvasEl,
     motionAdapter = null,
     useMirrorMotion = true,
@@ -289,6 +87,7 @@ export class RecoveryGameEngine {
   }) {
     this.getPoseLandmarks = getPoseLandmarks;
     this.getBiometrics = getBiometrics;
+    this.getPlannerContext = getPlannerContext;
     this.overlayCanvas = overlayCanvasEl;
     this.overlayCtx = this.overlayCanvas.getContext("2d");
     this.motionAdapter = motionAdapter;
@@ -301,6 +100,8 @@ export class RecoveryGameEngine {
 
     this.running = false;
     this.rafId = null;
+    this.targetTickMs = 1000 / 30;
+    this.lastTickAt = 0;
 
     this.zone = "shoulder";
     this.side = "left";
@@ -308,9 +109,12 @@ export class RecoveryGameEngine {
     this.currentActionIndex = 0;
     this.currentRepCount = 0;
     this.upSeen = false;
+    this.repPeakMatch = 0;
+    this.repPeakTracking = 0;
     this.progressScore = 0;
     this.amplitudes = [];
     this.completedActions = [];
+    this.skippedActions = [];
     this.startedAt = 0;
     this.motionSyncSamples = [];
     this.movementMatchSamples = [];
@@ -318,6 +122,8 @@ export class RecoveryGameEngine {
     this.latestMotionSample = null;
     this.latestLandmarks = null;
     this.previewAction = null;
+    this.activeCurriculum = null;
+    this.movementPreviewImages = {};
 
     this.silhouetteImage = new Image();
     this.silhouetteReady = false;
@@ -328,18 +134,57 @@ export class RecoveryGameEngine {
       this.silhouetteReady = false;
     };
     this.silhouetteImage.src = BODY_SILHOUETTE_URL;
+    this.preloadMovementPreviewImages();
+  }
+
+  preloadMovementPreviewImages() {
+    Object.entries(MOVEMENT_PREVIEW_URLS).forEach(([actionId, url]) => {
+      const image = new Image();
+      const item = {
+        actionId,
+        url,
+        image,
+        ready: false,
+        failed: false
+      };
+      image.onload = () => {
+        item.ready = true;
+        item.failed = false;
+      };
+      image.onerror = () => {
+        item.ready = false;
+        item.failed = true;
+      };
+      image.src = url;
+      this.movementPreviewImages[actionId] = item;
+    });
+  }
+
+  getMovementPreviewImage(actionId) {
+    if (!actionId) {
+      return null;
+    }
+    return this.movementPreviewImages[actionId] || null;
   }
 
   start({ zone = "shoulder", side = "left" } = {}) {
     this.zone = zone;
     this.side = side;
-    this.actions = actionsForZone(zone, side);
+    const plannerContext = {
+      ...(this.getBiometrics?.() || {}),
+      ...(this.getPlannerContext?.() || {})
+    };
+    this.activeCurriculum = buildZoneActions(zone, side, plannerContext);
+    this.actions = this.activeCurriculum.actions;
     this.currentActionIndex = 0;
     this.currentRepCount = 0;
     this.upSeen = false;
+    this.repPeakMatch = 0;
+    this.repPeakTracking = 0;
     this.progressScore = 0;
     this.amplitudes = [];
     this.completedActions = [];
+    this.skippedActions = [];
     this.motionSyncSamples = [];
     this.movementMatchSamples = [];
     this.vitalsScoreSamples = [];
@@ -348,9 +193,18 @@ export class RecoveryGameEngine {
     this.previewAction = this.actions[0] || null;
     this.startedAt = performance.now();
     this.running = true;
+    this.lastTickAt = 0;
     this.motionAdapter?.reset?.();
 
-    this.onStatus?.({ status: "running", zone, side });
+    this.onStatus?.({
+      status: "running",
+      zone,
+      side,
+      difficulty: this.activeCurriculum?.difficulty?.level || "mid",
+      plannerRationale: this.activeCurriculum?.plannerRationale || this.activeCurriculum?.difficulty?.rationale || "",
+      plannerMode: this.activeCurriculum?.plannerMode || "default",
+      datasetIds: this.activeCurriculum?.datasetIds || []
+    });
     this.emitActionChanged();
     this.tick();
   }
@@ -389,14 +243,34 @@ export class RecoveryGameEngine {
       side: this.side,
       durationSec,
       actionsCompleted: this.completedActions.length,
+      actionsSkipped: this.skippedActions.length,
       actionsTotal: this.actions.length,
       score: Math.round(this.progressScore),
       romGainEstimate,
       motionSyncAvg: Number.isFinite(motionSyncAvg) ? Math.round(motionSyncAvg) : null,
       movementMatchAvg: Number.isFinite(movementMatchAvg) ? Math.round(movementMatchAvg) : null,
       vitalScoreAvg: Number.isFinite(vitalScoreAvg) ? Math.round(vitalScoreAvg) : null,
-      completedActions: [...this.completedActions]
+      completedActions: [...this.completedActions],
+      skippedActions: [...this.skippedActions],
+      curriculum: this.activeCurriculum
     };
+  }
+
+  getActiveCurriculum() {
+    return this.activeCurriculum
+      ? {
+        ...this.activeCurriculum,
+        actions: this.activeCurriculum.actions.map((action) => ({
+          id: action.id,
+          label: action.label,
+          description: action.description,
+          repsTarget: action.repsTarget,
+          datasetRefs: [...(action.datasetRefs || [])],
+          retrievalScore: action.retrievalScore,
+          retrievalReason: action.retrievalReason
+        }))
+      }
+      : null;
   }
 
   resolveLandmarks(baseLandmarks, motionSample) {
@@ -456,19 +330,139 @@ export class RecoveryGameEngine {
       return 0;
     }
 
-    const amplitudeScore = Number.isFinite(sample.amplitude)
-      ? clamp(sample.amplitude / amplitudeTarget(action.id), 0, 1)
-      : 0.45;
+    const useMotionSync = this.zone === "shoulder";
+    const trackingConfidence = clamp(
+      Number(sample.trackingConfidence ?? (useMotionSync ? motionSample?.confidence : null) ?? 0.52),
+      0,
+      1
+    );
+    const amplitudeRatio = Number.isFinite(sample.amplitude)
+      ? sample.amplitude / Math.max(amplitudeTarget(action.id), 0.001)
+      : 0.35;
+    const amplitudeScore = amplitudeRatio >= 1
+      ? 1
+      : clamp(amplitudeRatio, 0, 1);
+    const directionScore = sample.up || sample.down ? 1 : 0.25;
+    const syncScore = useMotionSync && Number.isFinite(motionSample?.syncScore)
+      ? clamp(motionSample.syncScore / 100, 0, 1)
+      : trackingConfidence;
 
-    const directionScore = sample.up || sample.down ? 0.9 : 0.4;
-    let match = amplitudeScore * 0.7 + directionScore * 0.3;
+    let match = amplitudeScore * 0.48
+      + directionScore * 0.16
+      + trackingConfidence * 0.2
+      + syncScore * 0.16;
 
-    if (Number.isFinite(motionSample?.syncScore)) {
-      const sync = clamp(motionSample.syncScore / 100, 0, 1);
-      match = match * 0.65 + sync * 0.35;
+    if (amplitudeScore < 0.45) {
+      match *= 0.76;
+    }
+    if (trackingConfidence < this.getTrackingThreshold() - 0.08) {
+      match *= 0.72;
+    }
+    return clamp(match, 0, 1);
+  }
+
+  computeTrackingConfidence(action, landmarks, motionSample) {
+    if (!action || !Array.isArray(landmarks)) {
+      return clamp(Number(motionSample?.confidence ?? 0.42), 0, 1);
     }
 
-    return clamp(match, 0, 1);
+    const useMotionSync = this.zone === "shoulder";
+    const visibilities = getActionTrackingIndexes(action.id, this.side)
+      .map((idx) => landmarks[idx]?.visibility)
+      .filter((value) => Number.isFinite(value))
+      .map((value) => clamp(value, 0, 1));
+
+    const poseConfidence = visibilities.length
+      ? (visibilities.reduce((sum, value) => sum + value, 0) / visibilities.length)
+      : 0.56;
+    const motionConfidence = useMotionSync && Number.isFinite(motionSample?.confidence)
+      ? clamp(motionSample.confidence, 0, 1)
+      : poseConfidence;
+
+    return clamp(poseConfidence * 0.72 + motionConfidence * 0.28, 0, 1);
+  }
+
+  getRepMatchThreshold() {
+    const level = this.activeCurriculum?.difficulty?.level || "mid";
+    if (level === "high") {
+      return 0.72;
+    }
+    if (level === "low") {
+      return 0.58;
+    }
+    return 0.65;
+  }
+
+  getTrackingThreshold() {
+    const level = this.activeCurriculum?.difficulty?.level || "mid";
+    if (level === "high") {
+      return 0.5;
+    }
+    if (level === "low") {
+      return 0.34;
+    }
+    return 0.42;
+  }
+
+  completeSequence(forcePerfectFinish = true) {
+    const vitalsScore = this.computeVitalsScore();
+    this.progressScore = forcePerfectFinish
+      ? 100
+      : this.computeProgressScore(0, vitalsScore);
+    this.emitProgress(this.latestMotionSample, forcePerfectFinish ? 1 : 0, vitalsScore);
+    this.drawOverlay(null, true, this.latestMotionSample);
+    const summary = this.getSummary();
+    this.onComplete?.(summary);
+    this.stop();
+  }
+
+  advanceToNextAction({ forcePerfectFinish = true } = {}) {
+    this.currentActionIndex += 1;
+    this.currentRepCount = 0;
+    this.upSeen = false;
+    this.repPeakMatch = 0;
+    this.repPeakTracking = 0;
+
+    if (this.currentActionIndex >= this.actions.length) {
+      this.completeSequence(forcePerfectFinish);
+      return null;
+    }
+
+    this.emitActionChanged();
+    return this.actions[this.currentActionIndex];
+  }
+
+  skipCurrentAction(reason = "manual") {
+    const action = this.actions[this.currentActionIndex];
+    if (!this.running || !action) {
+      return null;
+    }
+
+    this.skippedActions.push({
+      id: action.id,
+      label: action.label,
+      reason
+    });
+
+    const nextAction = this.advanceToNextAction({ forcePerfectFinish: false });
+    if (!nextAction && !this.running) {
+      return {
+        skippedAction: action,
+        nextAction: null,
+        completed: true
+      };
+    }
+
+    const vitalsScore = this.computeVitalsScore();
+    this.progressScore = this.computeProgressScore(0, vitalsScore);
+    this.emitProgress(this.latestMotionSample, 0, vitalsScore);
+    this.drawOverlay(null, false, this.latestMotionSample);
+
+    return {
+      skippedAction: action,
+      nextAction,
+      completed: false
+    };
   }
 
   tick = () => {
@@ -476,9 +470,16 @@ export class RecoveryGameEngine {
       return;
     }
 
+    const nowMs = performance.now();
+    if (this.lastTickAt && (nowMs - this.lastTickAt) < this.targetTickMs) {
+      this.rafId = requestAnimationFrame(this.tick);
+      return;
+    }
+    this.lastTickAt = nowMs;
+
     const action = this.actions[this.currentActionIndex];
     const baseLandmarks = this.getPoseLandmarks?.();
-    const motionSample = this.motionAdapter?.analyze?.(baseLandmarks, performance.now()) || null;
+    const motionSample = this.motionAdapter?.analyze?.(baseLandmarks, nowMs) || null;
     this.latestMotionSample = motionSample?.available ? motionSample : null;
     if (this.latestMotionSample && Number.isFinite(this.latestMotionSample.syncScore)) {
       this.motionSyncSamples.push(this.latestMotionSample.syncScore);
@@ -492,44 +493,51 @@ export class RecoveryGameEngine {
       sample = action.sample(landmarks);
     }
 
+    const trackingConfidence = this.computeTrackingConfidence(action, landmarks, this.latestMotionSample);
+    if (sample) {
+      sample.trackingConfidence = trackingConfidence;
+    }
+    const movementMatch = this.computeMovementMatch(action, sample, this.latestMotionSample);
+    const repMatchThreshold = this.getRepMatchThreshold();
+    const trackingThreshold = this.getTrackingThreshold();
+
     if (sample) {
       if (Number.isFinite(sample.amplitude)) {
         this.amplitudes.push(sample.amplitude);
       }
 
-      if (sample.up) {
+      if (sample.up && movementMatch >= repMatchThreshold && trackingConfidence >= trackingThreshold) {
         this.upSeen = true;
+        this.repPeakMatch = Math.max(this.repPeakMatch, movementMatch);
+        this.repPeakTracking = Math.max(this.repPeakTracking, trackingConfidence);
+      } else if (sample.up && this.upSeen) {
+        this.repPeakMatch = Math.max(this.repPeakMatch, movementMatch);
+        this.repPeakTracking = Math.max(this.repPeakTracking, trackingConfidence);
       } else if (sample.down && this.upSeen) {
-        this.currentRepCount += 1;
-        this.upSeen = false;
-      }
-
-      if (this.currentRepCount >= action.repsTarget) {
-        this.completedActions.push({
-          id: action.id,
-          label: action.label,
-          reps: this.currentRepCount
-        });
-
-        this.currentActionIndex += 1;
-        this.currentRepCount = 0;
-        this.upSeen = false;
-
-        if (this.currentActionIndex >= this.actions.length) {
-          this.progressScore = 100;
-          this.emitProgress(this.latestMotionSample, 1, this.computeVitalsScore());
-          this.drawOverlay(sample, true, this.latestMotionSample);
-          const summary = this.getSummary();
-          this.onComplete?.(summary);
-          this.stop();
-          return;
+        const repQualified = this.repPeakMatch >= repMatchThreshold
+          && this.repPeakTracking >= trackingThreshold;
+        if (repQualified) {
+          this.currentRepCount += 1;
         }
+        this.upSeen = false;
+        this.repPeakMatch = 0;
+        this.repPeakTracking = 0;
 
-        this.emitActionChanged();
+        if (repQualified && this.currentRepCount >= action.repsTarget) {
+          this.completedActions.push({
+            id: action.id,
+            label: action.label,
+            reps: this.currentRepCount
+          });
+
+          const nextAction = this.advanceToNextAction({ forcePerfectFinish: true });
+          if (!nextAction && !this.running) {
+            return;
+          }
+        }
       }
     }
 
-    const movementMatch = this.computeMovementMatch(action, sample, this.latestMotionSample);
     const vitalsScore = this.computeVitalsScore();
     this.movementMatchSamples.push(movementMatch * 100);
     this.vitalsScoreSamples.push(vitalsScore * 100);
@@ -563,7 +571,11 @@ export class RecoveryGameEngine {
       total: this.actions.length,
       ...action,
       repsDone: this.currentRepCount,
-      nextLabel: nextAction?.label || null
+      nextLabel: nextAction?.label || null,
+      difficulty: this.activeCurriculum?.difficulty?.level || "mid",
+      plannerRationale: this.activeCurriculum?.plannerRationale || this.activeCurriculum?.difficulty?.rationale || "",
+      plannerMode: this.activeCurriculum?.plannerMode || "default",
+      datasetIds: this.activeCurriculum?.datasetIds || []
     });
   }
 
@@ -572,6 +584,7 @@ export class RecoveryGameEngine {
     this.onProgress?.({
       score: this.progressScore,
       actionsCompleted: this.completedActions.length,
+      actionsSkipped: this.skippedActions.length,
       actionsTotal: this.actions.length,
       actionId: action?.id || null,
       actionLabel: action?.label || null,
@@ -581,7 +594,8 @@ export class RecoveryGameEngine {
       motionUpperArmRad: Number.isFinite(motionSample?.upperArmRad) ? motionSample.upperArmRad : null,
       motionForearmRad: Number.isFinite(motionSample?.forearmRad) ? motionSample.forearmRad : null,
       movementMatchScore: clamp(movementMatch, 0, 1) * 100,
-      vitalsScore: clamp(vitalsScore, 0, 1) * 100
+      vitalsScore: clamp(vitalsScore, 0, 1) * 100,
+      requiredMatchScore: this.getRepMatchThreshold() * 100
     });
   }
 
@@ -664,7 +678,10 @@ export class RecoveryGameEngine {
     const centerY = (minY + maxY) * 0.5;
     const spanY = Math.max(maxY - minY, 80);
     const drawH = spanY * 1.22;
-    const drawW = drawH * 0.42;
+    const imageRatio = this.silhouetteImage?.naturalWidth && this.silhouetteImage?.naturalHeight
+      ? this.silhouetteImage.naturalWidth / this.silhouetteImage.naturalHeight
+      : 0.52;
+    const drawW = drawH * imageRatio;
     const x = centerX - drawW * 0.5;
     const y = centerY - drawH * 0.52;
 
@@ -704,27 +721,57 @@ export class RecoveryGameEngine {
     ctx.fillStyle = "rgba(201, 233, 246, 0.9)";
     ctx.fillText("Match this action rhythm", x + 10, y + 33);
 
-    const figX = x + 56;
-    const figY = y + 36;
-    const figW = 95;
-    const figH = 124;
-    if (this.silhouetteReady && this.silhouetteImage?.naturalWidth) {
-      ctx.globalAlpha = 0.8;
-      ctx.drawImage(this.silhouetteImage, figX, figY, figW, figH);
-      ctx.globalCompositeOperation = "source-atop";
-      ctx.fillStyle = "rgba(196, 209, 217, 0.58)";
-      ctx.fillRect(figX, figY, figW, figH);
-      ctx.globalCompositeOperation = "source-over";
-      ctx.globalAlpha = 1;
-    } else {
-      ctx.fillStyle = "rgba(170, 174, 180, 0.8)";
-      ctx.fillRect(figX + 34, figY + 8, 28, 96);
-      ctx.beginPath();
-      ctx.arc(figX + 48, figY + 16, 14, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    const figX = x + 12;
+    const figY = y + 40;
+    const figW = panelWidth - 24;
+    const figH = panelHeight - 52;
+    const movementPreview = this.getMovementPreviewImage(action?.id);
+    const showImage = movementPreview?.ready && movementPreview?.image?.naturalWidth;
 
-    this.drawPreviewMotionPath(ctx, action, phase, figX, figY, figW, figH);
+    ctx.save();
+    roundRect(ctx, figX, figY, figW, figH, 10);
+    ctx.clip();
+    const panelGradient = ctx.createLinearGradient(figX, figY, figX, figY + figH);
+    panelGradient.addColorStop(0, "rgba(11, 35, 52, 0.9)");
+    panelGradient.addColorStop(1, "rgba(8, 23, 35, 0.9)");
+    ctx.fillStyle = panelGradient;
+    ctx.fillRect(figX, figY, figW, figH);
+    ctx.restore();
+
+    if (showImage) {
+      const image = movementPreview.image;
+      const scale = Math.min(figW / image.naturalWidth, figH / image.naturalHeight);
+      const drawW = image.naturalWidth * scale;
+      const drawH = image.naturalHeight * scale;
+      const dx = figX + (figW - drawW) * 0.5;
+      const dy = figY + (figH - drawH) * 0.5;
+
+      ctx.save();
+      ctx.globalAlpha = 0.96;
+      ctx.drawImage(image, dx, dy, drawW, drawH);
+      ctx.restore();
+    } else {
+      const fallbackX = figX + 46;
+      const fallbackY = figY + 10;
+      const fallbackW = figW - 92;
+      const fallbackH = figH - 18;
+      if (this.silhouetteReady && this.silhouetteImage?.naturalWidth) {
+        ctx.globalAlpha = 0.8;
+        ctx.drawImage(this.silhouetteImage, fallbackX, fallbackY, fallbackW, fallbackH);
+        ctx.globalCompositeOperation = "source-atop";
+        ctx.fillStyle = "rgba(196, 209, 217, 0.58)";
+        ctx.fillRect(fallbackX, fallbackY, fallbackW, fallbackH);
+        ctx.globalCompositeOperation = "source-over";
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.fillStyle = "rgba(170, 174, 180, 0.8)";
+        ctx.fillRect(fallbackX + 34, fallbackY + 8, 28, 96);
+        ctx.beginPath();
+        ctx.arc(fallbackX + 48, fallbackY + 16, 14, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      this.drawPreviewMotionPath(ctx, action, phase, fallbackX, fallbackY, fallbackW, fallbackH);
+    }
     ctx.restore();
   }
 
@@ -873,7 +920,7 @@ export class RecoveryGameEngine {
     ctx.fillStyle = "rgba(165, 226, 252, 0.95)";
     ctx.fillText(`${matchText} | ${vitalsText} | ${motionText}`, 16, 76);
     ctx.fillStyle = "rgba(210, 239, 252, 0.85)";
-    ctx.fillText("Follow the movement preview at bottom-left to perform each rep.", 16, 96);
+    ctx.fillText("Only clean matches to the shown movement count as reps.", 16, 96);
 
     this.drawActionPreview(ctx, this.previewAction || action, phase, width, height);
 

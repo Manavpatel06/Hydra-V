@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from scipy.signal import firwin, lfilter
+from scipy.signal import filtfilt, firwin, lfilter
 
 from app.signal_processing import SessionState
 
@@ -37,10 +37,41 @@ def _to_float_array(values: Any) -> np.ndarray:
 def _estimate_sample_rate_hz(timestamps_ms: np.ndarray) -> float:
     if timestamps_ms.size < 2:
         return 0.0
-    duration_sec = (timestamps_ms[-1] - timestamps_ms[0]) / 1000.0
-    if duration_sec <= 0:
+    diffs = np.diff(timestamps_ms.astype(np.float64)) / 1000.0
+    diffs = diffs[np.isfinite(diffs) & (diffs > 1e-4)]
+    if not diffs.size:
         return 0.0
-    return float(timestamps_ms.size / duration_sec)
+    return float(np.clip(1.0 / np.median(diffs), 8.0, 60.0))
+
+
+def _resample_uniform(timestamps_ms: np.ndarray, values: np.ndarray, fs_hz: float) -> np.ndarray:
+    if timestamps_ms.size < 2 or values.size < 2:
+        return np.array([])
+
+    mask = np.isfinite(timestamps_ms) & np.isfinite(values)
+    t = timestamps_ms[mask]
+    v = values[mask]
+    if t.size < 2:
+        return np.array([])
+
+    order = np.argsort(t)
+    t = t[order]
+    v = v[order]
+    unique_t, unique_idx = np.unique(t, return_index=True)
+    v = v[unique_idx]
+    if unique_t.size < 2:
+        return np.array([])
+
+    start = float(unique_t[0])
+    end = float(unique_t[-1])
+    if end - start < 2000:
+        return np.array([])
+
+    t_uniform = np.arange(start, end, 1000.0 / max(fs_hz, 1e-6), dtype=np.float64)
+    if t_uniform.size < 16:
+        return np.array([])
+
+    return np.interp(t_uniform, unique_t, v)
 
 
 def _fir_bandpass(data: np.ndarray, low_hz: float, high_hz: float, fs_hz: float) -> np.ndarray:
@@ -63,7 +94,11 @@ def _fir_bandpass(data: np.ndarray, low_hz: float, high_hz: float, fs_hz: float)
         order += 1
 
     coeffs = firwin(numtaps=order, cutoff=[low, high], pass_zero=False, window="hamming")
-    filtered = lfilter(coeffs, [1.0], data)
+    centered = data - np.mean(data)
+    try:
+        filtered = filtfilt(coeffs, [1.0], centered)
+    except Exception:
+        filtered = lfilter(coeffs, [1.0], centered)
     return filtered
 
 
@@ -130,7 +165,7 @@ def _compute_band_peak_bpm(
     return (bpm if confidence > 0.05 else None), confidence
 
 
-def _compute_signal_quality(raw_values: np.ndarray, fill_factor: float) -> float:
+def _compute_signal_quality(raw_values: np.ndarray, fill_factor: float, heart_conf: float, breath_conf: float) -> float:
     if raw_values.size < 4:
         return 0.0
 
@@ -146,7 +181,8 @@ def _compute_signal_quality(raw_values: np.ndarray, fill_factor: float) -> float
     else:
         quality = _clamp(1.0 - (cv - 0.3) / 0.7, 0.1, 0.5)
 
-    return _clamp(quality * (0.3 + 0.7 * fill_factor), 0.0, 1.0)
+    extraction = _clamp(heart_conf * 0.7 + breath_conf * 0.3, 0.0, 1.0)
+    return _clamp(quality * (0.3 + 0.7 * fill_factor) * (0.65 + 0.35 * extraction), 0.0, 1.0)
 
 
 @dataclass
@@ -186,6 +222,16 @@ class RuViewClient:
             return self._cache
 
         values = _to_float_array(state.ppg_values)
+        if state.ppg_g and len(state.ppg_g) == len(state.ppg_values):
+            g_values = _to_float_array(state.ppg_g)
+            valid = np.isfinite(g_values)
+            if np.mean(valid) >= 0.35:
+                g_values = g_values.copy()
+                if not np.all(valid):
+                    idx = np.arange(g_values.size)
+                    g_values[~valid] = np.interp(idx[~valid], idx[valid], g_values[valid])
+                values = g_values
+
         timestamps_ms = _to_float_array(state.ppg_ts)
         if values.size != timestamps_ms.size:
             return self._cache
@@ -194,8 +240,13 @@ class RuViewClient:
         if fs_hz < 4.0:
             return self._cache
 
-        breath_signal = _fir_bandpass(values, BREATH_MIN_HZ, BREATH_MAX_HZ, fs_hz)
-        heart_signal = _fir_bandpass(values, HEART_MIN_HZ, HEART_MAX_HZ, fs_hz)
+        values_uniform = _resample_uniform(timestamps_ms, values, fs_hz)
+        if values_uniform.size < 48:
+            return self._cache
+        values_uniform = values_uniform - np.mean(values_uniform)
+
+        breath_signal = _fir_bandpass(values_uniform, BREATH_MIN_HZ, BREATH_MAX_HZ, fs_hz)
+        heart_signal = _fir_bandpass(values_uniform, HEART_MIN_HZ, HEART_MAX_HZ, fs_hz)
 
         breath_bpm, breath_conf = _compute_band_peak_bpm(breath_signal, fs_hz, BREATH_MIN_HZ, BREATH_MAX_HZ)
         heart_bpm, heart_conf = _compute_band_peak_bpm(heart_signal, fs_hz, HEART_MIN_HZ, HEART_MAX_HZ)
@@ -205,7 +256,7 @@ class RuViewClient:
 
         duration_sec = max((timestamps_ms[-1] - timestamps_ms[0]) / 1000.0, 0.0)
         fill_factor = _clamp(duration_sec / 30.0, 0.0, 1.0)
-        signal_quality = _compute_signal_quality(values, fill_factor)
+        signal_quality = _compute_signal_quality(values_uniform, fill_factor, heart_conf, breath_conf)
 
         result = {
             "heart_rate_bpm": float(heart_bpm) if heart_bpm is not None else None,

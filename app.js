@@ -9,7 +9,6 @@ import { PlasticityScoreEstimator } from "./src/features/cardiac/PlasticityScore
 import { AdaptiveBeatSelector } from "./src/features/neuro/AdaptiveBeatSelector.js";
 import { ElevenLabsClient } from "./src/features/neuro/ElevenLabsClient.js";
 import { NarrationManager } from "./src/features/neuro/NarrationManager.js";
-import { buildThetaNarration } from "./src/features/neuro/NarrationBuilder.js";
 import { NeuroacousticEngine } from "./src/features/neuro/NeuroacousticEngine.js";
 import { FascialThermalEngine } from "./src/features/thermal/FascialThermalEngine.js";
 import { recommendProtocol, defaultProtocol, inferModality } from "./src/features/adaptive/AdaptiveProtocolEngine.js";
@@ -19,6 +18,9 @@ import { renderGardenSnapshot } from "./src/features/garden/GardenCanvasRenderer
 import { RecoveryGameEngine } from "./src/features/game/RecoveryGameEngine.js";
 import { MirrorMotionAdapter } from "./src/features/game/MirrorMotionAdapter.js";
 import { VirtualRecoveryWorld } from "./src/features/game/VirtualRecoveryWorld.js";
+import { SplineRecoveryWorld } from "./src/features/game/SplineRecoveryWorld.js";
+import { getGuideResourceCatalog } from "./src/features/game/ExercisePlanner.js";
+import { WearableVitalsBridge } from "./src/features/wearable/WearableVitalsBridge.js";
 
 const STORAGE_KEY = "hydrav_sessions_v1";
 const ATHLETE_ID = "athlete-default-001";
@@ -35,6 +37,24 @@ const auraScanEngine = new AuraScanEngine({
     analyzeEndpoint: DEFAULTS.auraScan.analyzeProxyUrl,
     resetEndpoint: DEFAULTS.auraScan.resetProxyUrl,
     backendIntervalMs: DEFAULTS.auraScan.analyticsIntervalMs
+  }
+});
+
+const wearableBridge = new WearableVitalsBridge({
+  onFrame: (frame) => {
+    auraScanEngine.ingestWearableSample(frame);
+    eventBus.emit(EVENTS.WEARABLE_FRAME, frame);
+    publishBiometricFrame({
+      timestampMs: frame.timestampMs,
+      rPeakDetected: Number.isFinite(frame.rrIntervalMs),
+      rrIntervalMs: frame.rrIntervalMs,
+      heartRateBpm: frame.heartRateBpm,
+      hrvRmssdMs: state.latestBiometrics?.hrvRmssdMs ?? null,
+      microsaccadeHz: state.latestBiometrics?.microsaccadeHz ?? null
+    });
+  },
+  onStatus: (payload) => {
+    eventBus.emit(EVENTS.WEARABLE_STATUS, payload);
   }
 });
 
@@ -99,6 +119,7 @@ const elements = {
   leftMetricPosture: byId("left-metric-posture"),
   leftMetricHeart: byId("left-metric-heart"),
   leftMetricBalance: byId("left-metric-balance"),
+  leftMetricCalories: byId("left-metric-calories"),
   leftMetricJoint: byId("left-metric-joint"),
   leftGameActionTitle: byId("left-game-action-title"),
   leftGameActionDesc: byId("left-game-action-desc"),
@@ -118,6 +139,7 @@ const elements = {
   handshakeStatusPill: byId("handshake-status-pill"),
   cardiacStatusPill: byId("cardiac-engine-status"),
   deviceApiStatusPill: byId("device-api-status"),
+  wearableStatusPill: byId("wearable-status"),
   neuroPhasePill: byId("neuro-phase-status"),
   voiceStatusPill: byId("voice-status"),
   cameraStage: byId("camera-stage"),
@@ -133,6 +155,7 @@ const elements = {
   intakeAnalysisText: byId("intake-analysis-text"),
   intakeNextButton: byId("intake-next-button"),
   gameStartButton: byId("game-start-button"),
+  gameSkipButton: byId("game-skip-button"),
   gameStopButton: byId("game-stop-button"),
   gameStatus: byId("game-status"),
   gameActionTitle: byId("game-action-title"),
@@ -146,7 +169,7 @@ const elements = {
   gameProgressFill: byId("game-progress-fill"),
   worldBuildOverall: byId("world-build-overall"),
   worldBuildFill: byId("world-build-fill"),
-  worldBuildFoundation: byId("world-build-foundation"),
+  worldBuildFoundation: byId("world-build-formation"),
   worldBuildWalls: byId("world-build-walls"),
   worldBuildRoof: byId("world-build-roof"),
   worldBuildPeak: byId("world-build-peak"),
@@ -196,6 +219,8 @@ const elements = {
   mqttPauseButton: byId("mqtt-pause"),
   mqttResumeButton: byId("mqtt-resume"),
   mqttStopButton: byId("mqtt-stop"),
+  wearableConnectButton: byId("wearable-connect"),
+  wearableDisconnectButton: byId("wearable-disconnect"),
   gateOffsetInput: byId("gate-offset"),
   gateOffsetValue: byId("gate-offset-value"),
   toggleGatingButton: byId("toggle-gating"),
@@ -220,6 +245,10 @@ const state = {
     status: "logged_out",
     hasToken: false
   },
+  wearable: {
+    status: "idle",
+    source: null
+  },
   gameRunning: false,
   gameResult: null,
   voiceEnabled: DEFAULTS.voice.enabled,
@@ -232,25 +261,86 @@ const state = {
   lastSummaryRecord: null
 };
 
+const UI_PERF = Object.freeze({
+  auraPanelMs: 120,
+  biometricPanelMs: 100,
+  gameTrackerMs: 180
+});
+
+let lastAuraPanelUpdateAt = 0;
+let lastBiometricPanelUpdateAt = 0;
+let lastGameTrackerSyncAt = 0;
+let lastWorldStoryId = null;
+
 const motionAdapter = DEFAULTS.game.useMirrorMotionAdapter
   ? new MirrorMotionAdapter()
   : null;
-const virtualRecoveryWorld = new VirtualRecoveryWorld({
+const threeRecoveryWorld = new VirtualRecoveryWorld({
   canvasEl: elements.virtualGameCanvas
 });
+const splineRecoveryWorld = new SplineRecoveryWorld({
+  canvasEl: elements.virtualGameCanvas,
+  getPoseLandmarks: () => auraScanEngine.getLatestPoseLandmarks(),
+  sceneUrl: DEFAULTS.game.splineSceneUrl
+});
+
+const gameWorldMode = String(DEFAULTS.game.worldEngine || "three").toLowerCase();
+const preferredRecoveryWorld = gameWorldMode === "spline"
+  ? splineRecoveryWorld
+  : gameWorldMode === "hybrid"
+    ? splineRecoveryWorld
+    : threeRecoveryWorld;
+let activeRecoveryWorld = preferredRecoveryWorld;
+
+function worldEngineName(world) {
+  return world === splineRecoveryWorld ? "spline" : "three";
+}
+
+function setActiveRecoveryWorld(world) {
+  activeRecoveryWorld = world;
+}
+
+function resetRecoveryWorldPreference() {
+  setActiveRecoveryWorld(preferredRecoveryWorld);
+}
+
+async function startRecoveryWorld(context) {
+  const preferredWorld = activeRecoveryWorld;
+  try {
+    await Promise.resolve(preferredWorld.start(context));
+    return preferredWorld;
+  } catch (error) {
+    if (preferredWorld !== threeRecoveryWorld) {
+      log(`Spline world unavailable (${error.message}). Falling back to Three.js world.`, "warn");
+      setActiveRecoveryWorld(threeRecoveryWorld);
+      await Promise.resolve(threeRecoveryWorld.start(context));
+      return threeRecoveryWorld;
+    }
+    throw error;
+  }
+}
 
 const gameEngine = new RecoveryGameEngine({
   getPoseLandmarks: () => auraScanEngine.getLatestPoseLandmarks(),
   getBiometrics: () => state.latestBiometrics,
+  getPlannerContext: () => ({
+    ...(state.baselineMetrics || {}),
+    ...(state.latestBiometrics || {}),
+    thermalSun: state.thermalResult?.recommendedPads?.sun || null
+  }),
   overlayCanvasEl: elements.gameOverlayCanvas,
   motionAdapter,
   useMirrorMotion: DEFAULTS.game.useMirrorMotionOnLeftShoulder,
   onStatus: (payload) => {
+    const difficultyTag = payload.difficulty ? ` | ${payload.difficulty.toUpperCase()} plan` : "";
     elements.gameStatus.textContent = payload.status === "running"
-      ? `Guided game running (${payload.side} ${payload.zone}).`
+      ? `Guided game running (${payload.side} ${payload.zone}${difficultyTag}).`
       : "Game stopped.";
     if (payload.status !== "running") {
       elements.gameMotionSync.textContent = "-- %";
+    }
+    if (payload.status === "running" && payload.plannerRationale) {
+      appendWorldLog(`Planner: ${payload.plannerRationale}`);
     }
   },
   onProgress: (payload) => {
@@ -262,8 +352,15 @@ const gameEngine = new RecoveryGameEngine({
       ? `${Math.round(payload.motionSyncScore)}%`
       : "-- %";
     elements.gameProgressFill.style.width = `${payload.score}%`;
-    virtualRecoveryWorld.update(payload);
+    activeRecoveryWorld?.update(payload);
     updateWorldBuildUi();
+
+    const stats = activeRecoveryWorld?.getBuildStats?.();
+    const actionImpact = describeActionImpact(payload.actionId);
+    const storyLine = stats?.story?.line ? ` ${stats.story.line}` : "";
+    const combinedImpact = `${actionImpact}${storyLine}`.trim();
+    elements.gameImpactText.textContent = combinedImpact;
+    elements.leftGameImpact.textContent = combinedImpact;
   },
   onActionChanged: (payload) => {
     elements.gameActionTitle.textContent = `Action ${payload.index + 1}: ${payload.label}`;
@@ -356,6 +453,7 @@ function setStage(stage) {
   elements.stepIntake.classList.toggle("step-active", stage === "intake");
   elements.stepGame.classList.toggle("step-active", stage === "game" || stage === "postscan");
   elements.stepSummary.classList.toggle("step-active", stage === "summary");
+  scheduleOverlayResize();
 }
 
 function formatTimer(seconds) {
@@ -384,17 +482,17 @@ function activeScanDurationSec(mode) {
 
 function describeActionImpact(actionId) {
   const map = {
-    raise: "Raises a support beam in the virtual structure.",
-    cross: "Aligns wall bracing in your build.",
-    "elbow-drive": "Locks side support blocks into position.",
-    march: "Places stepping stones in foundation rows.",
-    "side-step": "Extends side walls for stability.",
-    hinge: "Anchors rear support joints.",
-    "mini-squat": "Lifts a foundation block into place.",
-    "step-lift": "Stacks a vertical support column.",
-    extension: "Extends a bridge panel toward completion."
+    raise: "The hero lifts a sky beam to open the upper gates.",
+    cross: "Cross-link braces tighten and steady the structure.",
+    "elbow-drive": "Side locks engage and reinforce your shield walls.",
+    march: "Power steps energize the foundation path.",
+    "side-step": "Lateral movement extends the defensive wall line.",
+    hinge: "Core hinge anchors the rear support arc.",
+    "mini-squat": "Each squat lifts a cornerstone into position.",
+    "step-lift": "Step lifts stack a recovery tower segment.",
+    extension: "Leg extension pushes the final bridge span forward."
   };
-  return map[actionId] || "Builds and stabilizes your recovery world with each rep.";
+  return map[actionId] || "Each rep powers the hero and rebuilds the recovery world.";
 }
 
 function appendWorldLog(message) {
@@ -414,10 +512,11 @@ function resetWorldUi() {
   elements.worldBuildRoof.textContent = "0 / 9";
   elements.worldBuildPeak.textContent = "0 / 1";
   elements.worldActionLog.innerHTML = "";
+  lastWorldStoryId = null;
 }
 
 function updateWorldBuildUi() {
-  const stats = virtualRecoveryWorld.getBuildStats();
+  const stats = activeRecoveryWorld?.getBuildStats?.();
   if (!stats) {
     return;
   }
@@ -427,12 +526,24 @@ function updateWorldBuildUi() {
   elements.worldBuildWalls.textContent = `${stats.walls} / ${stats.targets.walls}`;
   elements.worldBuildRoof.textContent = `${stats.roof} / ${stats.targets.roof}`;
   elements.worldBuildPeak.textContent = `${stats.peak} / ${stats.targets.peak}`;
+
+  if (stats.story?.id && stats.story.id !== lastWorldStoryId) {
+    lastWorldStoryId = stats.story.id;
+    const title = stats.story.title ? `${stats.story.title}: ` : "";
+    appendWorldLog(`${title}${stats.story.line || "Recovery world evolving."}`);
+  }
 }
 
 function updateAnatomyPanelForStage(stage) {
   const gameLike = stage === "game" || stage === "postscan";
   elements.anatomyScanView.classList.toggle("hidden", gameLike);
   elements.anatomyGameView.classList.toggle("hidden", !gameLike);
+  
+  const gameBuildPanel = byId("game-build-panel");
+  if (gameBuildPanel) {
+    gameBuildPanel.style.display = gameLike ? "flex" : "none";
+  }
+  
   if (gameLike) {
     elements.anatomyPanelTitle.textContent = "Current Exercise";
     elements.anatomyPanelSubtitle.textContent = "Track reps and movement while building progress.";
@@ -466,6 +577,19 @@ function updateLeftScanMetrics(frame = {}) {
 }
 
 function syncGameTrackerFromBodyMap() {
+  if (state.stage !== "game" && state.stage !== "postscan") {
+    return;
+  }
+  if (document.hidden) {
+    return;
+  }
+
+  const nowMs = performance.now();
+  if (nowMs - lastGameTrackerSyncAt < UI_PERF.gameTrackerMs) {
+    return;
+  }
+  lastGameTrackerSyncAt = nowMs;
+
   const src = elements.auraBodymapCanvas;
   const dst = elements.gameTrackerCanvas;
   if (!src || !dst || !src.width || !src.height) {
@@ -663,14 +787,43 @@ function hydrateAdaptiveState() {
   renderGarden();
 }
 
+let overlayResizeRafId = null;
+
+function scheduleOverlayResize() {
+  if (overlayResizeRafId) {
+    cancelAnimationFrame(overlayResizeRafId);
+  }
+  overlayResizeRafId = requestAnimationFrame(() => {
+    overlayResizeRafId = null;
+    syncOverlayCanvasSize();
+  });
+}
+
+function resolveOverlaySize() {
+  const rect = elements.cameraStage.getBoundingClientRect();
+  const stageWidth = Math.round(rect.width);
+  const stageHeight = Math.round(rect.height);
+  if (stageWidth >= 120 && stageHeight >= 120) {
+    return { width: stageWidth, height: stageHeight };
+  }
+
+  const fallbackWidth = Number(elements.auraCameraCanvas.width) || 960;
+  const fallbackHeight = Number(elements.auraCameraCanvas.height) || 540;
+  return { width: fallbackWidth, height: fallbackHeight };
+}
+
 function syncOverlayCanvasSize() {
-  const width = elements.auraCameraCanvas.width || 960;
-  const height = elements.auraCameraCanvas.height || 540;
-  elements.virtualGameCanvas.width = width;
-  elements.virtualGameCanvas.height = height;
-  elements.gameOverlayCanvas.width = width;
-  elements.gameOverlayCanvas.height = height;
-  virtualRecoveryWorld.resize();
+  const { width, height } = resolveOverlaySize();
+  if (elements.virtualGameCanvas.width !== width || elements.virtualGameCanvas.height !== height) {
+    elements.virtualGameCanvas.width = width;
+    elements.virtualGameCanvas.height = height;
+  }
+  if (elements.gameOverlayCanvas.width !== width || elements.gameOverlayCanvas.height !== height) {
+    elements.gameOverlayCanvas.width = width;
+    elements.gameOverlayCanvas.height = height;
+  }
+  threeRecoveryWorld.resize();
+  splineRecoveryWorld.resize();
 }
 
 async function ensureCameraStarted() {
@@ -689,7 +842,8 @@ function stopCamera() {
   thermalEngine.clearOverlay();
   neuralHandshakeEngine.stop();
   gameEngine.stop();
-  virtualRecoveryWorld.stop();
+  threeRecoveryWorld.stop();
+  splineRecoveryWorld.stop();
   state.cameraRunning = false;
   state.scanMode = null;
   state.gameRunning = false;
@@ -800,6 +954,7 @@ async function publishHydrawavControlCommand(playCmd, label) {
 async function startIntakeScanFlow() {
   try {
     await ensureCameraStarted();
+    void wearableBridge.tryAutoReconnect();
     const durationSec = clamp(Number(elements.scanDurationInput.value) || 60, 20, 180);
     state.baselineMetrics = null;
     state.postMetrics = null;
@@ -843,6 +998,11 @@ function buildIntakeAnalysisText() {
 
 async function beginGameFlow() {
   void narrationManager.primeAudio();
+  try {
+    await neuroEngine.enableAudio();
+  } catch (error) {
+    log(`Neuroacoustic priming warning: ${error.message}`, "warn");
+  }
   if (!state.baselineMetrics) {
     log("Complete intake scan before starting game flow.", "warn");
     return;
@@ -865,10 +1025,17 @@ async function beginGameFlow() {
     return;
   }
 
+  resetRecoveryWorldPreference();
   setStage("game");
   state.gameRunning = true;
   state.gameResult = null;
-  virtualRecoveryWorld.start({ zone: focus.zone, side: focus.side });
+  scheduleOverlayResize();
+  try {
+    await startRecoveryWorld({ zone: focus.zone, side: focus.side });
+  } catch (error) {
+    log(`Recovery world failed to start: ${error.message}`, "warn");
+    elements.gameStatus.textContent = "3D world could not start. Camera-guided recovery is still active.";
+  }
   resetWorldUi();
   updateWorldBuildUi();
   appendWorldLog(`Session started: ${focus.side} ${focus.zone} focus.`);
@@ -909,22 +1076,25 @@ async function beginGameFlow() {
 
   gameEngine.start({ zone: focus.zone, side: focus.side });
   const motionSuffix = motionAdapter ? " with mirror motion sync." : ".";
-  elements.gameStatus.textContent = `Game running on ${focus.side} ${focus.zone}. Follow action prompts${motionSuffix}`;
-  log(`Game flow started for ${focus.side} ${focus.zone}.`);
+  const worldTag = worldEngineName(activeRecoveryWorld);
+  elements.gameStatus.textContent = `Game running on ${focus.side} ${focus.zone} (${worldTag} world). Follow action prompts${motionSuffix}`;
+  log(`Game flow started for ${focus.side} ${focus.zone} using ${worldTag} world.`);
 }
 
 async function speakActionCue(payload) {
   if (!state.voiceEnabled) {
     return;
   }
-  const text = `${state.sessionContext.athleteName}, action ${payload.index + 1}. ${payload.label}. ${payload.description}`;
+  const reps = Number(payload?.repsTarget) > 0 ? ` ${payload.repsTarget} reps.` : "";
+  const text = `Next movement: ${payload.label}.${reps}`;
   await narrationManager.speak(text, { source: "recovery-game", actionId: payload.id });
 }
 
 async function handleGameComplete(summary) {
   state.gameRunning = false;
   state.gameResult = summary;
-  virtualRecoveryWorld.stop();
+  threeRecoveryWorld.stop();
+  splineRecoveryWorld.stop();
   updateWorldBuildUi();
   appendWorldLog(`Build complete: ${Math.round(summary.score)}% quality score.`);
   elements.gameNextUp.textContent = "Post-session scan and summary";
@@ -993,13 +1163,10 @@ function createSessionRecord(outcomes) {
 
 function buildSummaryVoiceText(sessionRecord, nextRecommendation) {
   const score = recoveryScore(sessionRecord);
-  const focusZone = state.sessionContext.focusZone;
-  const expected = round(nextRecommendation.expectedImprovement, 2);
-  const motionSync = Number.isFinite(sessionRecord?.outcomes?.motionSync)
-    ? Math.round(sessionRecord.outcomes.motionSync)
-    : null;
-  const motionText = motionSync !== null ? ` Motion sync averaged ${motionSync} percent.` : "";
-  return `${state.sessionContext.athleteName}, session complete. Recovery score is ${score}. Focus zone was ${focusZone}. Next adaptive protocol expects improvement of ${expected}.${motionText}`;
+  const expected = Number.isFinite(nextRecommendation?.expectedImprovement)
+    ? ` Predicted next gain ${round(nextRecommendation.expectedImprovement, 2)}.`
+    : "";
+  return `Session complete. Analysis is ready.${score ? ` Recovery score ${score}.` : ""}${expected}`;
 }
 
 function buildReaAiAnalysis(outcomes, baseline, post, recommendation, gameSummary) {
@@ -1117,7 +1284,8 @@ function resetForNewSession() {
   setScanTimer(clamp(Number(elements.scanDurationInput.value) || 60, 20, 180));
   elements.intakeAnalysisText.textContent = "Complete the intake scan to generate body-map analysis and session targets.";
   gameEngine.stop();
-  virtualRecoveryWorld.stop();
+  threeRecoveryWorld.stop();
+  splineRecoveryWorld.stop();
   resetWorldUi();
   neuralHandshakeEngine.stop();
   thermalEngine.clearOverlay();
@@ -1137,7 +1305,10 @@ function bindUi() {
   narrationManager.setEnabled(state.voiceEnabled);
   elements.voiceEnabledInput.checked = state.voiceEnabled;
   setPill(elements.voiceStatusPill, state.voiceEnabled ? "Enabled" : "Disabled", state.voiceEnabled ? "live" : "idle");
-  window.addEventListener("pointerdown", () => { void narrationManager.primeAudio(); }, { once: true });
+  window.addEventListener("pointerdown", () => {
+    void narrationManager.primeAudio();
+    void neuroEngine.enableAudio().catch(() => {});
+  }, { once: true });
   elements.scanDurationInput.value = String(DEFAULTS.auraScan.scanDurationSec);
   setScanTimer(DEFAULTS.auraScan.scanDurationSec);
   resetWorldUi();
@@ -1160,11 +1331,32 @@ function bindUi() {
       void beginGameFlow();
     }
   });
+  elements.gameSkipButton.addEventListener("click", () => {
+    if (!state.gameRunning) {
+      return;
+    }
+    const result = gameEngine.skipCurrentAction("manual");
+    if (!result?.skippedAction) {
+      return;
+    }
+    if (result.completed) {
+      appendWorldLog(`Skipped: ${result.skippedAction.label}`);
+      log(`Skipped workout: ${result.skippedAction.label}.`);
+      return;
+    }
+    const nextLabel = result.nextAction?.label || "post-session recheck";
+    elements.gameStatus.textContent = `Skipped ${result.skippedAction.label}. Next: ${nextLabel}.`;
+    elements.gameNextUp.textContent = nextLabel;
+    elements.leftGameNext.textContent = nextLabel;
+    appendWorldLog(`Skipped: ${result.skippedAction.label}`);
+    log(`Skipped workout: ${result.skippedAction.label}.`);
+  });
   elements.gameStopButton.addEventListener("click", async () => {
     if (state.gameRunning) {
       state.gameRunning = false;
       gameEngine.stop();
-      virtualRecoveryWorld.stop();
+      threeRecoveryWorld.stop();
+      splineRecoveryWorld.stop();
       neuralHandshakeEngine.stop();
       cardiacEngine.stop();
       neuroEngine.stopSession();
@@ -1185,7 +1377,8 @@ function bindUi() {
       log("Game stopped manually.", "warn");
     } else {
       gameEngine.stop();
-      virtualRecoveryWorld.stop();
+      threeRecoveryWorld.stop();
+      splineRecoveryWorld.stop();
     }
   });
   elements.summaryRestart.addEventListener("click", () => { resetForNewSession(); });
@@ -1241,6 +1434,21 @@ function bindUi() {
     }
   });
 
+  elements.wearableConnectButton.addEventListener("click", async () => {
+    try {
+      const ok = await wearableBridge.connectInteractive();
+      if (!ok) {
+        log("Wearable connection cancelled or unavailable.", "warn");
+      }
+    } catch (error) {
+      log(`Wearable connect failed: ${error.message}`, "warn");
+    }
+  });
+
+  elements.wearableDisconnectButton.addEventListener("click", () => {
+    void wearableBridge.disconnect();
+  });
+
   elements.gateOffsetInput.addEventListener("input", () => {
     const value = Number(elements.gateOffsetInput.value);
     elements.gateOffsetValue.textContent = `${value} ms`;
@@ -1256,7 +1464,7 @@ function bindUi() {
     }
   });
   window.addEventListener("resize", () => {
-    syncOverlayCanvasSize();
+    scheduleOverlayResize();
     renderGarden();
   });
 }
@@ -1271,10 +1479,12 @@ function bindEvents() {
     }
     if (status === "camera_running") {
       state.cameraRunning = true;
-      syncOverlayCanvasSize();
+      elements.cameraStage.classList.add("camera-live");
+      scheduleOverlayResize();
     }
     if (status === "camera_stopped") {
       state.cameraRunning = false;
+      elements.cameraStage.classList.remove("camera-live");
       setScanTimer(activeScanDurationSec("baseline"));
     }
   });
@@ -1289,26 +1499,37 @@ function bindEvents() {
       microsaccadeHz: d.microsaccadeHz,
       readinessScore: d.readinessScore,
       symmetryDeltaPct: d.symmetryDeltaPct,
-      breathRatePerMin: d.breathRatePerMin
+      breathRatePerMin: d.breathRatePerMin,
+      heartRateConfidence: d.heartRateConfidence,
+      cameraSignalQuality: d.cameraSignalQuality,
+      poseQuality: d.poseQuality
     };
-    elements.metricAuraHr.textContent = Number.isFinite(d.heartRateBpm) ? `${round(d.heartRateBpm, 1)} bpm` : "-- bpm";
-    elements.metricAuraHrv.textContent = Number.isFinite(d.hrvRmssdMs) ? `${round(d.hrvRmssdMs, 1)} ms` : "-- ms";
-    elements.metricAuraSymmetry.textContent = Number.isFinite(d.symmetryDeltaPct) ? `${round(d.symmetryDeltaPct, 2)} %` : "-- %";
-    elements.metricAuraMicro.textContent = Number.isFinite(d.microsaccadeHz) ? `${round(d.microsaccadeHz, 3)} Hz` : "-- Hz";
-    elements.metricAuraBreath.textContent = Number.isFinite(d.breathRatePerMin) ? `${round(d.breathRatePerMin, 1)} /min` : "-- /min";
-    elements.metricAuraReadiness.textContent = Number.isFinite(d.readinessScore) ? `${round(d.readinessScore, 2)} / 10` : "-- / 10";
-    elements.metricAuraAlgorithm.textContent = typeof d.algorithm === "string" && d.algorithm ? d.algorithm.toUpperCase() : "--";
-    elements.metricAuraSource.textContent = typeof d.vitalsSource === "string" && d.vitalsSource ? d.vitalsSource : "--";
-    updateLeftScanMetrics(d);
-    syncGameTrackerFromBodyMap();
+
     const progress = clamp(Number(d.progress || 0), 0, 1);
     const activeDuration = activeScanDurationSec(state.scanMode);
     const remainingSec = Math.max(Math.ceil((1 - progress) * activeDuration), 0);
-    setScanTimer(remainingSec);
-    if (state.scanMode === "baseline") {
-      elements.intakeProgressLabel.textContent = `Intake scan progress ${Math.round(progress * 100)}%`;
-    } else if (state.scanMode === "post") {
-      elements.postscanStatus.textContent = `Post-scan progress ${Math.round(progress * 100)}%`;
+
+    const nowMs = performance.now();
+    const shouldRefreshPanels = (nowMs - lastAuraPanelUpdateAt >= UI_PERF.auraPanelMs) || progress >= 0.995;
+    if (shouldRefreshPanels) {
+      lastAuraPanelUpdateAt = nowMs;
+      elements.metricAuraHr.textContent = Number.isFinite(d.heartRateBpm) ? `${round(d.heartRateBpm, 1)} bpm` : "-- bpm";
+      elements.metricAuraHrv.textContent = Number.isFinite(d.hrvRmssdMs) ? `${round(d.hrvRmssdMs, 1)} ms` : "-- ms";
+      elements.metricAuraSymmetry.textContent = Number.isFinite(d.symmetryDeltaPct) ? `${round(d.symmetryDeltaPct, 2)} %` : "-- %";
+      elements.metricAuraMicro.textContent = Number.isFinite(d.microsaccadeHz) ? `${round(d.microsaccadeHz, 3)} Hz` : "-- Hz";
+      elements.metricAuraBreath.textContent = Number.isFinite(d.breathRatePerMin) ? `${round(d.breathRatePerMin, 1)} /min` : "-- /min";
+      elements.metricAuraReadiness.textContent = Number.isFinite(d.readinessScore) ? `${round(d.readinessScore, 2)} / 10` : "-- / 10";
+      elements.metricAuraAlgorithm.textContent = typeof d.algorithm === "string" && d.algorithm ? d.algorithm.toUpperCase() : "--";
+      elements.metricAuraSource.textContent = typeof d.vitalsSource === "string" && d.vitalsSource ? d.vitalsSource : "--";
+      updateLeftScanMetrics(d);
+      syncGameTrackerFromBodyMap();
+
+      setScanTimer(remainingSec);
+      if (state.scanMode === "baseline") {
+        elements.intakeProgressLabel.textContent = `Intake scan progress ${Math.round(progress * 100)}%`;
+      } else if (state.scanMode === "post") {
+        elements.postscanStatus.textContent = `Post-scan progress ${Math.round(progress * 100)}%`;
+      }
     }
   });
 
@@ -1346,9 +1567,14 @@ function bindEvents() {
     state.latestBiometrics = { ...state.latestBiometrics, ...frame };
     cardiacEngine.ingestFrame(frame);
     neuroEngine.updateBiometrics(frame);
-    elements.metricHeartRate.textContent = Number.isFinite(frame.heartRateBpm) ? `${round(frame.heartRateBpm, 1)} bpm` : "-- bpm";
-    elements.metricRR.textContent = Number.isFinite(frame.rrIntervalMs) ? `${round(frame.rrIntervalMs, 1)} ms` : "-- ms";
-    elements.metricMicro.textContent = Number.isFinite(frame.microsaccadeHz) ? `${round(frame.microsaccadeHz, 2)} Hz` : "-- Hz";
+
+    const nowMs = performance.now();
+    if (nowMs - lastBiometricPanelUpdateAt >= UI_PERF.biometricPanelMs) {
+      lastBiometricPanelUpdateAt = nowMs;
+      elements.metricHeartRate.textContent = Number.isFinite(frame.heartRateBpm) ? `${round(frame.heartRateBpm, 1)} bpm` : "-- bpm";
+      elements.metricRR.textContent = Number.isFinite(frame.rrIntervalMs) ? `${round(frame.rrIntervalMs, 1)} ms` : "-- ms";
+      elements.metricMicro.textContent = Number.isFinite(frame.microsaccadeHz) ? `${round(frame.microsaccadeHz, 2)} Hz` : "-- Hz";
+    }
   });
 
   eventBus.on(EVENTS.THERMAL_SCAN_STATUS, (event) => {
@@ -1397,6 +1623,49 @@ function bindEvents() {
     }
   });
 
+  eventBus.on(EVENTS.WEARABLE_STATUS, (event) => {
+    const status = event.detail.status || "idle";
+    const source = event.detail.source || null;
+    state.wearable = { status, source };
+
+    if (status === "connected") {
+      const label = source ? `Connected (${source})` : "Connected";
+      setPill(elements.wearableStatusPill, label, "live");
+      log(source ? `Wearable connected: ${source}.` : "Wearable connected.");
+      return;
+    }
+    if (status === "connecting") {
+      setPill(elements.wearableStatusPill, "Connecting", "live");
+      return;
+    }
+    if (status === "unsupported") {
+      setPill(elements.wearableStatusPill, "Unsupported", "warn");
+      log(event.detail.message || "Web Bluetooth is unavailable in this browser.", "warn");
+      return;
+    }
+    if (status === "disconnected") {
+      setPill(elements.wearableStatusPill, "Disconnected", "idle");
+      return;
+    }
+    if (status === "idle") {
+      setPill(elements.wearableStatusPill, "Idle", "idle");
+      return;
+    }
+
+    setPill(elements.wearableStatusPill, humanize(status), status.includes("error") ? "warn" : "idle");
+  });
+
+  eventBus.on(EVENTS.WEARABLE_FRAME, (event) => {
+    const frame = event.detail || {};
+    state.latestBiometrics = {
+      ...state.latestBiometrics,
+      wearableHeartRateBpm: safeNumber(frame.heartRateBpm, null),
+      wearableRrIntervalMs: safeNumber(frame.rrIntervalMs, null),
+      wearableConfidence: safeNumber(frame.confidence, null),
+      wearableSource: frame.source || state.latestBiometrics.wearableSource
+    };
+  });
+
   eventBus.on(EVENTS.HYDRAWAV_MQTT_COMMAND, (event) => {
     const topic = event.detail.topic || "unknown-topic";
     log(`HydraWav MQTT publish ok on topic ${topic}.`);
@@ -1433,18 +1702,6 @@ function bindEvents() {
   eventBus.on(EVENTS.NEURO_PHASE_CHANGED, (event) => {
     const phase = event.detail.phase || "idle";
     setPill(elements.neuroPhasePill, phase.toUpperCase(), phase === "idle" ? "idle" : "live");
-    if (phase === "during" && state.voiceEnabled) {
-      void narrationManager.speak(
-        buildThetaNarration({
-          sessionContext: state.sessionContext,
-          protocolContext: state.protocolContext,
-          biometrics: state.latestBiometrics,
-          beatHz: null,
-          plasticityScore: state.plasticity?.score0To10
-        }),
-        { source: "theta-phase" }
-      );
-    }
   });
 
   eventBus.on(EVENTS.VOICE_NOTE_READY, () => {
@@ -1458,7 +1715,7 @@ function bindEvents() {
 
 function initializeBridge() {
   window.HydraVBridge = {
-    version: "0.4.0",
+    version: "0.6.0",
     publishBiometricFrame,
     setSessionContext(context = {}) {
       state.sessionContext = { ...state.sessionContext, ...context };
@@ -1470,6 +1727,21 @@ function initializeBridge() {
     },
     async startAuraCamera() { await ensureCameraStarted(); },
     stopAuraCamera() { stopCamera(); },
+    async connectWearable() { return await wearableBridge.connectInteractive(); },
+    async reconnectWearable() { return await wearableBridge.tryAutoReconnect(); },
+    disconnectWearable() { return wearableBridge.disconnect(); },
+    getWearableStatus() { return { ...state.wearable }; },
+    ingestWearableSample(sample = {}) {
+      auraScanEngine.ingestWearableSample(sample);
+      publishBiometricFrame({
+        timestampMs: safeNumber(sample.timestampMs, performance.now()),
+        rPeakDetected: Number.isFinite(Number(sample.rrIntervalMs)),
+        rrIntervalMs: safeNumber(sample.rrIntervalMs, null),
+        heartRateBpm: safeNumber(sample.heartRateBpm, null),
+        hrvRmssdMs: state.latestBiometrics?.hrvRmssdMs ?? null,
+        microsaccadeHz: state.latestBiometrics?.microsaccadeHz ?? null
+      });
+    },
     startAuraScan(options = {}) { startAuraScan("external", Number(options.durationSec) || DEFAULTS.auraScan.scanDurationSec); },
     stopAuraScan() { auraScanEngine.stopScan(); state.scanMode = null; },
     startFascialThermalScan(options = {}) { thermalEngine.startScan(Number(options.durationSec) || DEFAULTS.thermal.scanDurationSec); },
@@ -1512,6 +1784,7 @@ function initializeBridge() {
     },
     stopNeuroSession() { neuroEngine.stopSession(); },
     async speakNarration(text) { await narrationManager.speak(text, { source: "bridge" }); },
+    getExerciseResourceCatalog() { return getGuideResourceCatalog(); },
     getSnapshot() {
       return {
         stage: state.stage,
@@ -1521,13 +1794,15 @@ function initializeBridge() {
         thermalResult: state.thermalResult,
         latestBiometrics: state.latestBiometrics,
         gameResult: state.gameResult,
+        activeExercisePlan: gameEngine.getActiveCurriculum?.() || null,
         recommendation: state.recommendation,
         gardenSnapshot: state.gardenSnapshot,
         sessions: state.sessions
       };
     },
     async startFlow() { await startIntakeScanFlow(); },
-    async nextToGame() { await beginGameFlow(); }
+    async nextToGame() { await beginGameFlow(); },
+    skipCurrentWorkout() { return gameEngine.skipCurrentAction("bridge"); }
   };
 }
 
@@ -1543,10 +1818,16 @@ async function bootstrap() {
   setPill(elements.handshakeStatusPill, "Idle", "idle");
   setPill(elements.cardiacStatusPill, "Idle", "idle");
   setPill(elements.deviceApiStatusPill, "Logged Out", "idle");
+  setPill(elements.wearableStatusPill, "Idle", "idle");
   setPill(elements.neuroPhasePill, "Idle", "idle");
   await checkRuntimeHealth();
   if (!auraScanEngine.isSupported()) {
     log("Camera APIs are not supported in this browser.", "warn");
+  }
+  if (!wearableBridge.isSupported()) {
+    setPill(elements.wearableStatusPill, "Unsupported", "warn");
+  } else {
+    void wearableBridge.tryAutoReconnect();
   }
   try {
     await startIntakeScanFlow();

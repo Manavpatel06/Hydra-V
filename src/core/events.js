@@ -7,6 +7,8 @@
   AURA_SCAN_STATUS: "hydrav:aura-scan-status",
   AURA_SCAN_FRAME: "hydrav:aura-scan-frame",
   AURA_SCAN_COMPLETE: "hydrav:aura-scan-complete",
+  WEARABLE_STATUS: "hydrav:wearable-status",
+  WEARABLE_FRAME: "hydrav:wearable-frame",
   THERMAL_SCAN_STATUS: "hydrav:thermal-scan-status",
   THERMAL_SCAN_FRAME: "hydrav:thermal-scan-frame",
   THERMAL_SCAN_COMPLETE: "hydrav:thermal-scan-complete",
