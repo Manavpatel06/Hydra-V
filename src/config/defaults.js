@@ -22,7 +22,7 @@
       characteristicUuid: "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
     },
     mqtt: {
-      apiBaseUrl: "",
+      apiBaseUrl: "http://54.241.236.53:8080",
       loginProxyUrl: "/api/device/hydrawav/login",
       publishProxyUrl: "/api/device/hydrawav/publish",
       topic: "HydraWav3Pro/config",
@@ -69,6 +69,10 @@
     sampleFps: 10,
     maxFrames: 96,
     analyzeProxyUrl: "/api/thermal/analyze"
+  },
+  game: {
+    useReyaMotionBridge: true,
+    useReyaMirrorOnLeftShoulder: true
   },
   voice: {
     enabled: false,

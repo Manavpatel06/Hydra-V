@@ -230,10 +230,21 @@ function actionsForZone(zone, side) {
 }
 
 export class RecoveryGameEngine {
-  constructor({ getPoseLandmarks, overlayCanvasEl, onStatus, onProgress, onActionChanged, onComplete }) {
+  constructor({
+    getPoseLandmarks,
+    overlayCanvasEl,
+    reyaAdapter = null,
+    useReyaMirror = true,
+    onStatus,
+    onProgress,
+    onActionChanged,
+    onComplete
+  }) {
     this.getPoseLandmarks = getPoseLandmarks;
     this.overlayCanvas = overlayCanvasEl;
     this.overlayCtx = this.overlayCanvas.getContext("2d");
+    this.reyaAdapter = reyaAdapter;
+    this.useReyaMirror = !!useReyaMirror;
 
     this.onStatus = onStatus;
     this.onProgress = onProgress;
@@ -253,6 +264,8 @@ export class RecoveryGameEngine {
     this.amplitudes = [];
     this.completedActions = [];
     this.startedAt = 0;
+    this.reyaSyncSamples = [];
+    this.latestReyaSample = null;
   }
 
   start({ zone = "shoulder", side = "left" } = {}) {
@@ -265,8 +278,11 @@ export class RecoveryGameEngine {
     this.progressScore = 0;
     this.amplitudes = [];
     this.completedActions = [];
+    this.reyaSyncSamples = [];
+    this.latestReyaSample = null;
     this.startedAt = performance.now();
     this.running = true;
+    this.reyaAdapter?.reset?.();
 
     this.onStatus?.({ status: "running", zone, side });
     this.emitActionChanged();
@@ -279,6 +295,8 @@ export class RecoveryGameEngine {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
+    this.latestReyaSample = null;
+    this.reyaAdapter?.reset?.();
     this.clearOverlay();
     this.onStatus?.({ status: "stopped" });
   }
@@ -289,6 +307,9 @@ export class RecoveryGameEngine {
       ? this.amplitudes.reduce((sum, value) => sum + value, 0) / this.amplitudes.length
       : 0;
     const romGainEstimate = Math.round(clamp(amplitudeAvg * 100, 0, 25));
+    const reyaSyncAvg = this.reyaSyncSamples.length
+      ? this.reyaSyncSamples.reduce((sum, value) => sum + value, 0) / this.reyaSyncSamples.length
+      : null;
 
     return {
       zone: this.zone,
@@ -298,8 +319,28 @@ export class RecoveryGameEngine {
       actionsTotal: this.actions.length,
       score: Math.round(this.progressScore),
       romGainEstimate,
+      reyaSyncAvg: Number.isFinite(reyaSyncAvg) ? Math.round(reyaSyncAvg) : null,
+      reyaFrames: this.reyaSyncSamples.length,
       completedActions: [...this.completedActions]
     };
+  }
+
+  resolveLandmarks(baseLandmarks, reyaSample) {
+    if (!Array.isArray(baseLandmarks)) {
+      return null;
+    }
+    if (
+      this.useReyaMirror
+      && this.zone === "shoulder"
+      && this.side === "left"
+      && reyaSample?.available
+      && Number.isFinite(reyaSample.confidence)
+      && reyaSample.confidence >= 0.25
+      && Array.isArray(reyaSample.mirroredLandmarks)
+    ) {
+      return reyaSample.mirroredLandmarks;
+    }
+    return baseLandmarks;
   }
 
   tick = () => {
@@ -308,7 +349,13 @@ export class RecoveryGameEngine {
     }
 
     const action = this.actions[this.currentActionIndex];
-    const landmarks = this.getPoseLandmarks?.();
+    const baseLandmarks = this.getPoseLandmarks?.();
+    const reyaSample = this.reyaAdapter?.analyze?.(baseLandmarks, performance.now()) || null;
+    this.latestReyaSample = reyaSample?.available ? reyaSample : null;
+    if (this.latestReyaSample && Number.isFinite(this.latestReyaSample.syncScore)) {
+      this.reyaSyncSamples.push(this.latestReyaSample.syncScore);
+    }
+    const landmarks = this.resolveLandmarks(baseLandmarks, reyaSample);
     let sample = null;
 
     if (action && Array.isArray(landmarks) && landmarks.length > 28) {
@@ -340,8 +387,8 @@ export class RecoveryGameEngine {
 
         if (this.currentActionIndex >= this.actions.length) {
           this.progressScore = 100;
-          this.emitProgress();
-          this.drawOverlay(sample, true);
+          this.emitProgress(this.latestReyaSample);
+          this.drawOverlay(sample, true, this.latestReyaSample);
           const summary = this.getSummary();
           this.onComplete?.(summary);
           this.stop();
@@ -353,8 +400,8 @@ export class RecoveryGameEngine {
     }
 
     this.progressScore = this.computeProgressScore();
-    this.emitProgress();
-    this.drawOverlay(sample, false);
+    this.emitProgress(this.latestReyaSample);
+    this.drawOverlay(sample, false, this.latestReyaSample);
 
     this.rafId = requestAnimationFrame(this.tick);
   };
@@ -380,7 +427,7 @@ export class RecoveryGameEngine {
     });
   }
 
-  emitProgress() {
+  emitProgress(reyaSample) {
     const action = this.actions[this.currentActionIndex];
     this.onProgress?.({
       score: this.progressScore,
@@ -389,11 +436,14 @@ export class RecoveryGameEngine {
       actionId: action?.id || null,
       actionLabel: action?.label || null,
       repsDone: this.currentRepCount,
-      repsTarget: action?.repsTarget || 0
+      repsTarget: action?.repsTarget || 0,
+      reyaSyncScore: Number.isFinite(reyaSample?.syncScore) ? reyaSample.syncScore : null,
+      reyaUpperArmRad: Number.isFinite(reyaSample?.upperArmRad) ? reyaSample.upperArmRad : null,
+      reyaForearmRad: Number.isFinite(reyaSample?.forearmRad) ? reyaSample.forearmRad : null
     });
   }
 
-  drawOverlay(sample, finished) {
+  drawOverlay(sample, finished, reyaSample) {
     const ctx = this.overlayCtx;
     const width = this.overlayCanvas.width;
     const height = this.overlayCanvas.height;
@@ -401,7 +451,7 @@ export class RecoveryGameEngine {
     ctx.clearRect(0, 0, width, height);
 
     ctx.fillStyle = "rgba(6,20,30,0.32)";
-    ctx.fillRect(0, 0, width, 68);
+    ctx.fillRect(0, 0, width, 88);
 
     const action = this.actions[this.currentActionIndex];
     ctx.fillStyle = "#e3f3f7";
@@ -413,6 +463,13 @@ export class RecoveryGameEngine {
       ? `Score ${Math.round(this.progressScore)}%`
       : `${this.currentRepCount}/${action?.repsTarget || 0} reps  |  ${Math.round(this.progressScore)}% progress`;
     ctx.fillText(repText, 16, 52);
+
+    const reyaText = Number.isFinite(reyaSample?.syncScore)
+      ? `Reya Sync ${Math.round(reyaSample.syncScore)}% | Upper ${Math.round((reyaSample.upperArmRad || 0) * 57.2958)}deg`
+      : "Reya Sync --";
+    ctx.font = "500 12px JetBrains Mono";
+    ctx.fillStyle = "rgba(173, 232, 255, 0.95)";
+    ctx.fillText(reyaText, 16, 72);
 
     ctx.fillStyle = "rgba(255,255,255,0.16)";
     ctx.fillRect(16, height - 34, width - 32, 12);

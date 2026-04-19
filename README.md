@@ -75,6 +75,8 @@ Set these in `.env`:
 - `ELEVENLABS_VOICE_ID=...` (optional)
 - `ELEVENLABS_MODEL_ID=...` (optional)
 - `HYDRAWAV_API_BASE_URL=https://...`
+- `HYDRAWAV_USERNAME=...` (required for auto-auth)
+- `HYDRAWAV_PASSWORD=...` (required for auto-auth)
 
 Hybrid analytics:
 - `PY_AURA_API_BASE_URL=http://127.0.0.1:8010`

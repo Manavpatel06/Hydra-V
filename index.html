@@ -46,6 +46,10 @@
           <span id="cardiac-engine-status" class="pill pill-idle">Idle</span>
         </div>
         <div>
+          <span class="label">Device API</span>
+          <span id="device-api-status" class="pill pill-idle">Logged Out</span>
+        </div>
+        <div>
           <span class="label">BLE Link</span>
           <span id="ble-status" class="pill pill-idle">Disconnected</span>
         </div>
@@ -64,30 +68,22 @@
       <article class="panel anatomy-panel">
         <div class="panel-head">
           <h2>Anatomy + Live Metrics</h2>
-          <p>Cold-zone mapping and biomechanical vitals.</p>
+          <p>Cold-zone body map and session context.</p>
         </div>
 
         <div class="body-map-wrap">
           <canvas id="aura-bodymap-canvas" class="bodymap-canvas"></canvas>
         </div>
 
-        <div class="metric-grid">
-          <div class="metric"><span>Heart Rate</span><strong id="metric-aura-hr">-- bpm</strong></div>
-          <div class="metric"><span>HRV (RMSSD)</span><strong id="metric-aura-hrv">-- ms</strong></div>
-          <div class="metric"><span>Symmetry Delta</span><strong id="metric-aura-symmetry">-- %</strong></div>
-          <div class="metric"><span>Micro-Saccades</span><strong id="metric-aura-micro">-- Hz</strong></div>
-          <div class="metric"><span>Breath Rate</span><strong id="metric-aura-breath">-- /min</strong></div>
-          <div class="metric"><span>Readiness</span><strong id="metric-aura-readiness">-- / 10</strong></div>
-          <div class="metric"><span>rPPG Mode</span><strong id="metric-aura-algorithm">--</strong></div>
-          <div class="metric"><span>Vitals Source</span><strong id="metric-aura-source">--</strong></div>
-        </div>
+        <article class="analysis-box anatomy-note">
+          <h4>Placement Guide</h4>
+          <p>Use this panel to identify the cold-zone map while the camera overlay shows real-time vitals and AR game progress.</p>
+        </article>
 
-        <div class="metric-grid compact">
-          <div class="metric"><span>Live HR</span><strong id="metric-heart-rate">-- bpm</strong></div>
-          <div class="metric"><span>Live RR</span><strong id="metric-rr">-- ms</strong></div>
-          <div class="metric"><span>Live Micro</span><strong id="metric-micro">-- Hz</strong></div>
-          <div class="metric"><span>Plasticity</span><strong id="metric-plasticity">-- / 10</strong></div>
-        </div>
+        <article class="analysis-box anatomy-note">
+          <h4>Flow</h4>
+          <p>1) Run intake scan and confirm highlighted target zone.<br>2) Tap next to enter AR game with voice guidance.<br>3) Finish actions and review summary + garden growth.</p>
+        </article>
       </article>
 
       <article class="panel camera-panel">
@@ -102,78 +98,104 @@
           <canvas id="thermal-overlay-canvas" class="thermal-canvas"></canvas>
           <canvas id="neural-ghost-canvas" class="ghost-canvas"></canvas>
           <canvas id="game-overlay-canvas" class="game-canvas"></canvas>
-        </div>
+          <div class="stage-chip left">Anatomy + Metrics Overlay</div>
+          <div class="stage-chip right">AR Recovery Overlay</div>
 
-        <div id="stage-intake-panel" class="stage-panel">
-          <div class="panel-head inline">
-            <h3>Intake</h3>
-            <p id="intake-progress-label">Ready for 60-second scan.</p>
+          <div class="overlay-metrics aura-left">
+            <div class="metric metric-float"><span>Heart Rate</span><strong id="metric-aura-hr">-- bpm</strong></div>
+            <div class="metric metric-float"><span>HRV (RMSSD)</span><strong id="metric-aura-hrv">-- ms</strong></div>
+            <div class="metric metric-float"><span>Symmetry Delta</span><strong id="metric-aura-symmetry">-- %</strong></div>
+            <div class="metric metric-float"><span>Readiness</span><strong id="metric-aura-readiness">-- / 10</strong></div>
           </div>
 
-          <div class="controls-grid">
-            <label class="field">
-              <span>Scan Duration (sec)</span>
-              <input id="intake-scan-duration" type="number" min="20" max="180" step="1" value="60">
-            </label>
+          <div class="overlay-metrics aura-right">
+            <div class="metric metric-float"><span>Micro-Saccades</span><strong id="metric-aura-micro">-- Hz</strong></div>
+            <div class="metric metric-float"><span>Breath Rate</span><strong id="metric-aura-breath">-- /min</strong></div>
+            <div class="metric metric-float"><span>rPPG Mode</span><strong id="metric-aura-algorithm">--</strong></div>
+            <div class="metric metric-float"><span>Vitals Source</span><strong id="metric-aura-source">--</strong></div>
           </div>
 
-          <div class="button-row">
-            <button id="start-camera" type="button">Start Camera</button>
-            <button id="stop-camera" type="button" class="ghost">Stop Camera</button>
-            <button id="start-intake-scan" type="button">Start Intake Scan</button>
-          </div>
-
-          <article class="analysis-box">
-            <h4>Analysis Overlay</h4>
-            <p id="intake-analysis-text">Complete the intake scan to generate body-map analysis and session targets.</p>
-          </article>
-
-          <div class="button-row">
-            <button id="intake-next-button" type="button" disabled>Next: Start AR Recovery Game</button>
+          <div class="overlay-metrics telemetry-bottom">
+            <div class="metric metric-float"><span>Live HR</span><strong id="metric-heart-rate">-- bpm</strong></div>
+            <div class="metric metric-float"><span>Live RR</span><strong id="metric-rr">-- ms</strong></div>
+            <div class="metric metric-float"><span>Live Micro</span><strong id="metric-micro">-- Hz</strong></div>
+            <div class="metric metric-float"><span>Plasticity</span><strong id="metric-plasticity">-- / 10</strong></div>
           </div>
         </div>
 
-        <div id="stage-game-panel" class="stage-panel hidden">
-          <div class="panel-head inline">
-            <h3>AR Recovery Game</h3>
-            <p id="game-status">Press start to launch guided action sequence.</p>
+        <div class="flow-side">
+          <div id="stage-intake-panel" class="stage-panel">
+            <div class="panel-head inline">
+              <h3>Intake</h3>
+              <p id="intake-progress-label">Ready for 60-second scan.</p>
+            </div>
+
+            <div class="controls-grid">
+              <label class="field">
+                <span>Scan Duration (sec)</span>
+                <input id="intake-scan-duration" type="number" min="20" max="180" step="1" value="60">
+              </label>
+            </div>
+
+            <div class="button-row">
+              <button id="start-camera" type="button">Start Camera</button>
+              <button id="stop-camera" type="button" class="ghost">Stop Camera</button>
+              <button id="start-intake-scan" type="button">Start Intake Scan</button>
+            </div>
+
+            <article class="analysis-box">
+              <h4>Analysis Overlay</h4>
+              <p id="intake-analysis-text">Complete the intake scan to generate body-map analysis and session targets.</p>
+            </article>
+
+            <div class="button-row">
+              <button id="intake-next-button" type="button" disabled>Next: Start AR Recovery Game</button>
+            </div>
           </div>
 
-          <article class="analysis-box">
-            <h4 id="game-action-title">Action</h4>
-            <p id="game-action-desc">The next rehab action will appear here.</p>
-          </article>
+          <div id="stage-game-panel" class="stage-panel hidden">
+            <div class="panel-head inline">
+              <h3>AR Recovery Game</h3>
+              <p id="game-status">Press start to launch guided action sequence.</p>
+            </div>
 
-          <div class="game-stats">
-            <div><span>Score</span><strong id="game-score">0%</strong></div>
-            <div><span>Reps</span><strong id="game-reps">0 / 0</strong></div>
-            <div><span>Actions</span><strong id="game-actions-count">0 / 0</strong></div>
+            <article class="analysis-box">
+              <h4 id="game-action-title">Action</h4>
+              <p id="game-action-desc">The next rehab action will appear here.</p>
+            </article>
+
+            <div class="game-stats">
+              <div><span>Score</span><strong id="game-score">0%</strong></div>
+              <div><span>Reps</span><strong id="game-reps">0 / 0</strong></div>
+              <div><span>Actions</span><strong id="game-actions-count">0 / 0</strong></div>
+              <div><span>Reya Sync</span><strong id="game-reya-sync">-- %</strong></div>
+            </div>
+
+            <div class="progress-track"><div id="game-progress-fill"></div></div>
+
+            <div class="button-row">
+              <button id="game-start-button" type="button">Start Guided Game</button>
+              <button id="game-stop-button" type="button" class="ghost">Stop Game</button>
+            </div>
           </div>
 
-          <div class="progress-track"><div id="game-progress-fill"></div></div>
-
-          <div class="button-row">
-            <button id="game-start-button" type="button">Start Guided Game</button>
-            <button id="game-stop-button" type="button" class="ghost">Stop Game</button>
-          </div>
-        </div>
-
-        <div id="stage-postscan-panel" class="stage-panel hidden">
-          <div class="panel-head inline">
-            <h3>Post-Session Recheck</h3>
-            <p id="postscan-status">Collecting post-session biometrics...</p>
-          </div>
-        </div>
-
-        <div id="stage-summary-panel" class="stage-panel hidden">
-          <div class="panel-head inline">
-            <h3>Session Summary</h3>
-            <p id="summary-status">Session completed.</p>
+          <div id="stage-postscan-panel" class="stage-panel hidden">
+            <div class="panel-head inline">
+              <h3>Post-Session Recheck</h3>
+              <p id="postscan-status">Collecting post-session biometrics...</p>
+            </div>
           </div>
 
-          <div class="button-row">
-            <button id="summary-play-voice" type="button">Play Summary Voice</button>
-            <button id="summary-restart" type="button" class="ghost">Start New Session</button>
+          <div id="stage-summary-panel" class="stage-panel hidden">
+            <div class="panel-head inline">
+              <h3>Session Summary</h3>
+              <p id="summary-status">Session completed.</p>
+            </div>
+
+            <div class="button-row">
+              <button id="summary-play-voice" type="button">Play Summary Voice</button>
+              <button id="summary-restart" type="button" class="ghost">Start New Session</button>
+            </div>
           </div>
         </div>
       </article>
@@ -192,6 +214,7 @@
         <div class="metric"><span>Readiness Gain</span><strong id="summary-readiness-gain">--</strong></div>
         <div class="metric"><span>ROM Gain (Game)</span><strong id="summary-rom-gain">--</strong></div>
         <div class="metric"><span>Game Score</span><strong id="summary-game-score">--</strong></div>
+        <div class="metric"><span>Reya Motion Sync</span><strong id="summary-reya-sync">--</strong></div>
       </div>
 
       <div class="summary-grid">
@@ -228,6 +251,27 @@
 
       <div class="controls-grid">
         <label class="field">
+          <span>HydraWav API Base URL</span>
+          <input id="mqtt-api-base-url" type="text" value="http://54.241.236.53:8080" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>HydraWav Username</span>
+          <input id="mqtt-username" type="text" value="testpractitioner" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>HydraWav Password</span>
+          <input id="mqtt-password" type="password" value="1234" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>MQTT Topic</span>
+          <input id="mqtt-topic" type="text" value="HydraWav3Pro/config" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Device MAC</span>
+          <input id="mqtt-device-mac" type="text" value="74:4D:BD:A0:A3:EC" autocomplete="off">
+        </label>
+
+        <label class="field">
           <span>Gate Offset (ms)</span>
           <input id="gate-offset" type="range" min="80" max="120" step="1" value="100">
           <strong id="gate-offset-value">100 ms</strong>
@@ -252,6 +296,14 @@
           <input id="voice-enabled" type="checkbox">
           <span>Enable ElevenLabs narration</span>
         </label>
+      </div>
+
+      <div class="button-row">
+        <button id="mqtt-login" type="button">Login API</button>
+        <button id="mqtt-start" type="button">MQTT Start</button>
+        <button id="mqtt-pause" type="button" class="ghost">Pause</button>
+        <button id="mqtt-resume" type="button" class="ghost">Resume</button>
+        <button id="mqtt-stop" type="button" class="ghost">Stop</button>
       </div>
 
       <div class="button-row">

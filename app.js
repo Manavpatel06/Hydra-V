@@ -18,6 +18,7 @@ import { recoveryScore } from "./src/features/adaptive/scoring.js";
 import { buildGardenSnapshot } from "./src/features/garden/GardenGrowthEngine.js";
 import { renderGardenSnapshot } from "./src/features/garden/GardenCanvasRenderer.js";
 import { RecoveryGameEngine } from "./src/features/game/RecoveryGameEngine.js";
+import { ReyaMotionAdapter } from "./src/features/game/ReyaMotionAdapter.js";
 
 const STORAGE_KEY = "hydrav_sessions_v1";
 const ATHLETE_ID = "athlete-default-001";
@@ -101,6 +102,7 @@ const elements = {
   thermalStatusPill: byId("thermal-status-pill"),
   handshakeStatusPill: byId("handshake-status-pill"),
   cardiacStatusPill: byId("cardiac-engine-status"),
+  deviceApiStatusPill: byId("device-api-status"),
   bleStatusPill: byId("ble-status"),
   neuroPhasePill: byId("neuro-phase-status"),
   voiceStatusPill: byId("voice-status"),
@@ -121,6 +123,7 @@ const elements = {
   gameScore: byId("game-score"),
   gameReps: byId("game-reps"),
   gameActionsCount: byId("game-actions-count"),
+  gameReyaSync: byId("game-reya-sync"),
   gameProgressFill: byId("game-progress-fill"),
   postscanStatus: byId("postscan-status"),
   summaryStatus: byId("summary-status"),
@@ -130,6 +133,7 @@ const elements = {
   summaryReadinessGain: byId("summary-readiness-gain"),
   summaryRomGain: byId("summary-rom-gain"),
   summaryGameScore: byId("summary-game-score"),
+  summaryReyaSync: byId("summary-reya-sync"),
   summaryPlayVoice: byId("summary-play-voice"),
   summaryRestart: byId("summary-restart"),
   recModelMode: byId("rec-model-mode"),
@@ -154,6 +158,16 @@ const elements = {
   metricRR: byId("metric-rr"),
   metricMicro: byId("metric-micro"),
   metricPlasticity: byId("metric-plasticity"),
+  mqttApiBaseUrlInput: byId("mqtt-api-base-url"),
+  mqttUsernameInput: byId("mqtt-username"),
+  mqttPasswordInput: byId("mqtt-password"),
+  mqttTopicInput: byId("mqtt-topic"),
+  mqttDeviceMacInput: byId("mqtt-device-mac"),
+  mqttLoginButton: byId("mqtt-login"),
+  mqttStartButton: byId("mqtt-start"),
+  mqttPauseButton: byId("mqtt-pause"),
+  mqttResumeButton: byId("mqtt-resume"),
+  mqttStopButton: byId("mqtt-stop"),
   gateOffsetInput: byId("gate-offset"),
   gateOffsetValue: byId("gate-offset-value"),
   devicePrefixInput: byId("device-prefix"),
@@ -180,6 +194,10 @@ const state = {
   thermalResult: null,
   latestBiometrics: {},
   plasticity: null,
+  mqtt: {
+    status: "logged_out",
+    hasToken: false
+  },
   gameRunning: false,
   gameResult: null,
   voiceEnabled: DEFAULTS.voice.enabled,
@@ -192,18 +210,30 @@ const state = {
   lastSummaryRecord: null
 };
 
+const reyaMotionAdapter = DEFAULTS.game.useReyaMotionBridge
+  ? new ReyaMotionAdapter()
+  : null;
+
 const gameEngine = new RecoveryGameEngine({
   getPoseLandmarks: () => auraScanEngine.getLatestPoseLandmarks(),
   overlayCanvasEl: elements.gameOverlayCanvas,
+  reyaAdapter: reyaMotionAdapter,
+  useReyaMirror: DEFAULTS.game.useReyaMirrorOnLeftShoulder,
   onStatus: (payload) => {
     elements.gameStatus.textContent = payload.status === "running"
       ? `Guided game running (${payload.side} ${payload.zone}).`
       : "Game stopped.";
+    if (payload.status !== "running") {
+      elements.gameReyaSync.textContent = "-- %";
+    }
   },
   onProgress: (payload) => {
     elements.gameScore.textContent = `${Math.round(payload.score)}%`;
     elements.gameReps.textContent = `${payload.repsDone} / ${payload.repsTarget}`;
     elements.gameActionsCount.textContent = `${payload.actionsCompleted} / ${payload.actionsTotal}`;
+    elements.gameReyaSync.textContent = Number.isFinite(payload.reyaSyncScore)
+      ? `${Math.round(payload.reyaSyncScore)}%`
+      : "-- %";
     elements.gameProgressFill.style.width = `${payload.score}%`;
   },
   onActionChanged: (payload) => {
@@ -503,6 +533,81 @@ function startAuraScan(mode, durationSec) {
   auraScanEngine.startScan(durationSec);
 }
 
+function readMqttConfigFromUi() {
+  return {
+    apiBaseUrl: elements.mqttApiBaseUrlInput.value.trim(),
+    topic: elements.mqttTopicInput.value.trim(),
+    mac: elements.mqttDeviceMacInput.value.trim()
+  };
+}
+
+function readMqttCredentialsFromUi() {
+  return {
+    username: elements.mqttUsernameInput.value.trim(),
+    password: elements.mqttPasswordInput.value
+  };
+}
+
+async function ensureHydrawavReady(forAction = "runtime") {
+  const config = readMqttConfigFromUi();
+  if (!config.apiBaseUrl) {
+    throw new Error(`HydraWav API base URL is required for ${forAction}.`);
+  }
+  if (!config.topic) {
+    throw new Error(`HydraWav MQTT topic is required for ${forAction}.`);
+  }
+  if (!config.mac) {
+    throw new Error(`HydraWav device MAC is required for ${forAction}.`);
+  }
+
+  if (hydrawavMqttClient.hasToken()) {
+    return config;
+  }
+
+  const creds = readMqttCredentialsFromUi();
+  await hydrawavMqttClient.login({
+    apiBaseUrl: config.apiBaseUrl,
+    username: creds.username || undefined,
+    password: creds.password || undefined,
+    rememberMe: true
+  });
+  log("HydraWav API authenticated.");
+  return config;
+}
+
+function buildHydrawavStartPayload(mac) {
+  if (!mac) {
+    throw new Error("Device MAC is required.");
+  }
+
+  return {
+    mac,
+    ...DEFAULTS.cardiac.mqtt.startTemplate,
+    playCmd: 1
+  };
+}
+
+async function publishHydrawavStartCommand() {
+  const config = await ensureHydrawavReady("therapy start");
+  await hydrawavMqttClient.publish({
+    apiBaseUrl: config.apiBaseUrl,
+    topic: config.topic,
+    payload: JSON.stringify(buildHydrawavStartPayload(config.mac))
+  });
+  log("HydraWav start command published.");
+}
+
+async function publishHydrawavControlCommand(playCmd, label) {
+  const config = await ensureHydrawavReady(label);
+  await hydrawavMqttClient.sendControlCommand({
+    apiBaseUrl: config.apiBaseUrl,
+    topic: config.topic,
+    mac: config.mac,
+    playCmd
+  });
+  log(`HydraWav ${label} command published.`);
+}
+
 async function startIntakeScanFlow() {
   try {
     await ensureCameraStarted();
@@ -561,6 +666,15 @@ async function beginGameFlow() {
 
   const focus = getFocusTarget();
   setSessionAndProtocolFocus(focus.zone, focus.side);
+
+  try {
+    await publishHydrawavStartCommand();
+  } catch (error) {
+    elements.gameStatus.textContent = "HydraWav API is required before game start.";
+    log(`HydraWav start required but failed: ${error.message}`, "warn");
+    return;
+  }
+
   setStage("game");
   state.gameRunning = true;
   state.gameResult = null;
@@ -569,6 +683,7 @@ async function beginGameFlow() {
   elements.gameScore.textContent = "0%";
   elements.gameReps.textContent = "0 / 0";
   elements.gameActionsCount.textContent = "0 / 0";
+  elements.gameReyaSync.textContent = "-- %";
 
   try {
     await neuroEngine.enableAudio();
@@ -592,7 +707,8 @@ async function beginGameFlow() {
   }
 
   gameEngine.start({ zone: focus.zone, side: focus.side });
-  elements.gameStatus.textContent = `Game running on ${focus.side} ${focus.zone}. Follow action prompts.`;
+  const reyaSuffix = reyaMotionAdapter ? " with Reya mirror sync." : ".";
+  elements.gameStatus.textContent = `Game running on ${focus.side} ${focus.zone}. Follow action prompts${reyaSuffix}`;
   log(`Game flow started for ${focus.side} ${focus.zone}.`);
 }
 
@@ -608,7 +724,7 @@ async function handleGameComplete(summary) {
   state.gameRunning = false;
   state.gameResult = summary;
   elements.gameStatus.textContent = "Game complete. Starting post-session recheck...";
-  log(`Game complete. Score ${summary.score}% with ${summary.actionsCompleted}/${summary.actionsTotal} actions.`);
+  log(`Game complete. Score ${summary.score}% with ${summary.actionsCompleted}/${summary.actionsTotal} actions. Reya sync ${summary.reyaSyncAvg ?? "--"}%.`);
   if (state.scanMode === "game-monitor") {
     auraScanEngine.stopScan();
     state.scanMode = null;
@@ -616,6 +732,11 @@ async function handleGameComplete(summary) {
   neuralHandshakeEngine.stop();
   cardiacEngine.stop();
   neuroEngine.stopSession();
+  try {
+    await publishHydrawavControlCommand(3, "stop");
+  } catch (error) {
+    log(`HydraWav stop warning: ${error.message}`, "warn");
+  }
   await startPostscanFlow();
 }
 
@@ -638,6 +759,7 @@ function deriveSessionOutcomes(baseline, post, gameSummary) {
   const subjectiveReadinessGain = safeDelta(post?.readinessScore, baseline?.readinessScore) ?? 0;
   const score = Number.isFinite(gameSummary?.score) ? gameSummary.score : 0;
   const romGain = Number.isFinite(gameSummary?.romGainEstimate) ? gameSummary.romGainEstimate : 0;
+  const reyaSync = Number.isFinite(gameSummary?.reyaSyncAvg) ? gameSummary.reyaSyncAvg : 0;
   const painReduction = clamp(score / 18, 0, 6);
   return {
     hrvDelta: round(hrvDelta, 2),
@@ -646,6 +768,7 @@ function deriveSessionOutcomes(baseline, post, gameSummary) {
     microsaccadeStabilityGain: round(microsaccadeStabilityGain, 3),
     painReduction: round(painReduction, 2),
     romGain: round(romGain, 2),
+    reyaSync: round(reyaSync, 1),
     subjectiveReadinessGain: round(subjectiveReadinessGain, 2)
   };
 }
@@ -666,7 +789,11 @@ function buildSummaryVoiceText(sessionRecord, nextRecommendation) {
   const score = recoveryScore(sessionRecord);
   const focusZone = state.sessionContext.focusZone;
   const expected = round(nextRecommendation.expectedImprovement, 2);
-  return `${state.sessionContext.athleteName}, session complete. Recovery score is ${score}. Focus zone was ${focusZone}. Next adaptive protocol expects improvement of ${expected}. Your digital garden has grown with today's biological progress.`;
+  const reyaSync = Number.isFinite(sessionRecord?.outcomes?.reyaSync)
+    ? Math.round(sessionRecord.outcomes.reyaSync)
+    : null;
+  const reyaText = reyaSync !== null ? ` Reya mirror sync averaged ${reyaSync} percent.` : "";
+  return `${state.sessionContext.athleteName}, session complete. Recovery score is ${score}. Focus zone was ${focusZone}. Next adaptive protocol expects improvement of ${expected}.${reyaText} Your digital garden has grown with today's biological progress.`;
 }
 
 function renderSummary(outcomes, sessionRecord) {
@@ -677,6 +804,7 @@ function renderSummary(outcomes, sessionRecord) {
   elements.summaryReadinessGain.textContent = asDelta(outcomes.subjectiveReadinessGain, " /10");
   elements.summaryRomGain.textContent = asDelta(outcomes.romGain, " pts");
   elements.summaryGameScore.textContent = Number.isFinite(state.gameResult?.score) ? `${Math.round(state.gameResult.score)}%` : "--";
+  elements.summaryReyaSync.textContent = Number.isFinite(outcomes.reyaSync) ? `${Math.round(outcomes.reyaSync)}%` : "--";
 }
 
 async function finalizeSession() {
@@ -702,6 +830,7 @@ function resetForNewSession() {
   state.thermalResult = null;
   state.gameRunning = false;
   state.gameResult = null;
+  elements.gameReyaSync.textContent = "-- %";
   elements.intakeNextButton.disabled = true;
   elements.intakeProgressLabel.textContent = "Ready for 60-second scan.";
   elements.intakeAnalysisText.textContent = "Complete the intake scan to generate body-map analysis and session targets.";
@@ -727,13 +856,16 @@ function bindUi() {
   elements.scanDurationInput.value = String(DEFAULTS.auraScan.scanDurationSec);
   elements.gateOffsetInput.value = String(DEFAULTS.cardiac.gateOffsetMs);
   elements.gateOffsetValue.textContent = `${DEFAULTS.cardiac.gateOffsetMs} ms`;
+  elements.mqttApiBaseUrlInput.value = DEFAULTS.cardiac.mqtt.apiBaseUrl;
+  elements.mqttTopicInput.value = DEFAULTS.cardiac.mqtt.topic;
+  elements.mqttDeviceMacInput.value = DEFAULTS.cardiac.mqtt.mac;
 
   elements.startCameraButton.addEventListener("click", () => { void ensureCameraStarted(); });
   elements.stopCameraButton.addEventListener("click", () => { stopCamera(); });
   elements.startIntakeScanButton.addEventListener("click", () => { void startIntakeScanFlow(); });
   elements.intakeNextButton.addEventListener("click", () => { void beginGameFlow(); });
   elements.gameStartButton.addEventListener("click", () => { if (!state.gameRunning) { void beginGameFlow(); } });
-  elements.gameStopButton.addEventListener("click", () => {
+  elements.gameStopButton.addEventListener("click", async () => {
     if (state.gameRunning) {
       state.gameRunning = false;
       gameEngine.stop();
@@ -745,6 +877,12 @@ function bindUi() {
         state.scanMode = null;
       }
       elements.gameStatus.textContent = "Game stopped manually.";
+      elements.gameReyaSync.textContent = "-- %";
+      try {
+        await publishHydrawavControlCommand(3, "stop");
+      } catch (error) {
+        log(`HydraWav stop warning: ${error.message}`, "warn");
+      }
       log("Game stopped manually.", "warn");
     } else {
       gameEngine.stop();
@@ -757,6 +895,47 @@ function bindUi() {
     narrationManager.setEnabled(state.voiceEnabled);
     setPill(elements.voiceStatusPill, state.voiceEnabled ? "Enabled" : "Disabled", state.voiceEnabled ? "live" : "idle");
     log(state.voiceEnabled ? "Voice narration enabled." : "Voice narration disabled.");
+  });
+
+  elements.mqttLoginButton.addEventListener("click", async () => {
+    try {
+      await ensureHydrawavReady("manual login");
+      log("HydraWav API login verified.");
+    } catch (error) {
+      log(`HydraWav API login failed: ${error.message}`, "warn");
+    }
+  });
+
+  elements.mqttStartButton.addEventListener("click", async () => {
+    try {
+      await publishHydrawavStartCommand();
+    } catch (error) {
+      log(`HydraWav start failed: ${error.message}`, "warn");
+    }
+  });
+
+  elements.mqttPauseButton.addEventListener("click", async () => {
+    try {
+      await publishHydrawavControlCommand(2, "pause");
+    } catch (error) {
+      log(`HydraWav pause failed: ${error.message}`, "warn");
+    }
+  });
+
+  elements.mqttResumeButton.addEventListener("click", async () => {
+    try {
+      await publishHydrawavControlCommand(4, "resume");
+    } catch (error) {
+      log(`HydraWav resume failed: ${error.message}`, "warn");
+    }
+  });
+
+  elements.mqttStopButton.addEventListener("click", async () => {
+    try {
+      await publishHydrawavControlCommand(3, "stop");
+    } catch (error) {
+      log(`HydraWav stop failed: ${error.message}`, "warn");
+    }
   });
 
   elements.gateOffsetInput.addEventListener("input", () => {
@@ -898,10 +1077,46 @@ function bindEvents() {
     elements.metricBleFailures.textContent = String(event.detail.failedCount ?? 0);
   });
 
-  eventBus.on(EVENTS.CARDIAC_GATE_FIRED, (event) => {
+  eventBus.on(EVENTS.HYDRAWAV_MQTT_STATUS, (event) => {
+    state.mqtt = {
+      ...state.mqtt,
+      ...event.detail
+    };
+
+    const status = event.detail.status || "logged_out";
+    if (status === "authenticated") {
+      setPill(elements.deviceApiStatusPill, "Authenticated", "live");
+    } else if (status === "error") {
+      setPill(elements.deviceApiStatusPill, "Error", "warn");
+    } else {
+      setPill(elements.deviceApiStatusPill, "Logged Out", "idle");
+    }
+  });
+
+  eventBus.on(EVENTS.HYDRAWAV_MQTT_COMMAND, (event) => {
+    const topic = event.detail.topic || "unknown-topic";
+    log(`HydraWav MQTT publish ok on topic ${topic}.`);
+  });
+
+  eventBus.on(EVENTS.CARDIAC_GATE_FIRED, async (event) => {
     elements.metricGateCount.textContent = String(event.detail.sequence);
     elements.metricLastDelay.textContent = `${round(event.detail.effectiveDelayMs, 1)} ms`;
     elements.metricSeqId.textContent = String(event.detail.sequence);
+
+    try {
+      const config = await ensureHydrawavReady("cardiac gate sync");
+      await hydrawavMqttClient.sendGatePulse({
+        topic: DEFAULTS.cardiac.mqtt.gateTopic || config.topic,
+        mac: config.mac,
+        sequence: event.detail.sequence,
+        rrIntervalMs: event.detail.rrIntervalMs,
+        heartRateBpm: event.detail.heartRateBpm,
+        offsetMs: event.detail.offsetMs,
+        gateTimestampMs: event.detail.gateTimestampMs
+      });
+    } catch (error) {
+      log(`HydraWav gate sync failed: ${error.message}`, "warn");
+    }
   });
 
   eventBus.on(EVENTS.PLASTICITY_SCORE_UPDATED, (event) => {
@@ -1032,6 +1247,7 @@ async function bootstrap() {
   setPill(elements.thermalStatusPill, "Idle", "idle");
   setPill(elements.handshakeStatusPill, "Idle", "idle");
   setPill(elements.cardiacStatusPill, "Idle", "idle");
+  setPill(elements.deviceApiStatusPill, "Logged Out", "idle");
   setPill(elements.bleStatusPill, "Disconnected", "idle");
   setPill(elements.neuroPhasePill, "Idle", "idle");
   if (!bleClient.isSupported()) {
@@ -1039,6 +1255,13 @@ async function bootstrap() {
   }
   if (!auraScanEngine.isSupported()) {
     log("Camera APIs are not supported in this browser.", "warn");
+  }
+  try {
+    await ensureHydrawavReady("startup");
+    setPill(elements.deviceApiStatusPill, "Authenticated", "live");
+  } catch (error) {
+    setPill(elements.deviceApiStatusPill, "Required", "warn");
+    log(`HydraWav API is required. Setup/login failed on startup: ${error.message}`, "warn");
   }
   log("HYDRA-V flow runtime initialized (Features 1-7).");
 }

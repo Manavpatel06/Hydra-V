@@ -11,6 +11,10 @@ loadDotEnv(path.join(__dirname, ".env"));
 
 const PORT = Number(process.env.PORT || 3000);
 const HYDRAWAV_DEFAULT_BASE_URL = (process.env.HYDRAWAV_API_BASE_URL || "").trim();
+const HYDRAWAV_DEFAULT_USERNAME = (process.env.HYDRAWAV_USERNAME || "").trim();
+const HYDRAWAV_DEFAULT_PASSWORD = typeof process.env.HYDRAWAV_PASSWORD === "string"
+  ? process.env.HYDRAWAV_PASSWORD
+  : "";
 const PY_AURA_API_BASE_URL = (process.env.PY_AURA_API_BASE_URL || "http://127.0.0.1:8010").trim();
 const AURA_USE_PYTHON_ANALYTICS = (process.env.AURA_USE_PYTHON_ANALYTICS || "true").trim().toLowerCase() !== "false";
 const THERMAL_USE_PYTHON_ANALYTICS = (process.env.THERMAL_USE_PYTHON_ANALYTICS || "true").trim().toLowerCase() !== "false";
@@ -42,6 +46,7 @@ const server = http.createServer(async (req, res) => {
         service: "HYDRA-V Feature 1-5 runtime",
         elevenLabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY),
         hydrawavApiBaseUrlConfigured: Boolean(HYDRAWAV_DEFAULT_BASE_URL),
+        hydrawavCredentialsConfigured: Boolean(HYDRAWAV_DEFAULT_USERNAME && HYDRAWAV_DEFAULT_PASSWORD),
         hydrawavTokenCached: Boolean(hydrawavCachedAccessToken),
         auraPythonEnabled: AURA_USE_PYTHON_ANALYTICS,
         thermalPythonEnabled: THERMAL_USE_PYTHON_ANALYTICS,
@@ -167,12 +172,19 @@ async function handleElevenLabsTts(req, res) {
 async function handleHydrawavLogin(req, res) {
   try {
     const body = await readJson(req);
-    const username = typeof body.username === "string" ? body.username.trim() : "";
-    const password = typeof body.password === "string" ? body.password : "";
+    const username = typeof body.username === "string" && body.username.trim()
+      ? body.username.trim()
+      : HYDRAWAV_DEFAULT_USERNAME;
+    const password = typeof body.password === "string" && body.password.length
+      ? body.password
+      : HYDRAWAV_DEFAULT_PASSWORD;
     const rememberMe = body.rememberMe !== false;
 
     if (!username || !password) {
-      json(res, 400, { error: "HydraWav username and password are required." });
+      json(res, 400, {
+        error: "HydraWav username and password are required.",
+        details: "Provide them in request body or set HYDRAWAV_USERNAME and HYDRAWAV_PASSWORD in .env."
+      });
       return;
     }
 
