@@ -1,0 +1,65 @@
+services:
+  - type: web
+    name: hydra-v-web
+    runtime: node
+    plan: free
+    branch: main
+    autoDeployTrigger: commit
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    buildFilter:
+      paths:
+        - app.js
+        - server.js
+        - index.html
+        - style.css
+        - src/**
+        - package.json
+        - package-lock.json
+        - .env.example
+    envVars:
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: EXAVITQu4vr4xnSDxMaL
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_turbo_v2_5
+      - key: HYDRAWAV_API_BASE_URL
+        sync: false
+      - key: HYDRAWAV_USERNAME
+        sync: false
+      - key: HYDRAWAV_PASSWORD
+        sync: false
+      - key: PY_AURA_API_BASE_URL
+        fromService:
+          type: web
+          name: hydra-v-python
+          property: hostport
+      - key: AURA_USE_PYTHON_ANALYTICS
+        value: "true"
+      - key: THERMAL_USE_PYTHON_ANALYTICS
+        value: "true"
+      - key: AURA_PYTHON_TIMEOUT_MS
+        value: "1500"
+      - key: THERMAL_PYTHON_TIMEOUT_MS
+        value: "9000"
+
+  - type: web
+    name: hydra-v-python
+    runtime: python
+    plan: free
+    branch: main
+    autoDeployTrigger: commit
+    rootDir: python_service
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - python_service/**
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: RUVIEW_LOCAL_FUSION_ENABLED
+        value: "true"

@@ -63,6 +63,45 @@ npm start
 ```
 3. Open `http://localhost:3000`.
 
+## Deploy On Render (No GitHub Actions Needed)
+
+This setup avoids `.github/workflows`, so it works even if your token does not have `workflow` scope.
+
+1. Keep `render.yaml` in repo root.
+2. Go to Render dashboard and click `New +` -> `Blueprint`.
+3. Select this repo (`Manavpatel06/Hydra-V`) and branch `main`.
+4. Render creates two services from `render.yaml`:
+   - `hydra-v-web` (Node app)
+   - `hydra-v-python` (FastAPI service)
+5. Fill the required secret env vars in Render:
+   - `ELEVENLABS_API_KEY`
+   - `HYDRAWAV_API_BASE_URL`
+   - `HYDRAWAV_USERNAME`
+   - `HYDRAWAV_PASSWORD`
+6. Keep auto-deploy mode `On Commit` for both services.
+
+After this, every push to `main` redeploys automatically on Render.
+
+### Working Backend/Frontend Separately But Shipping To Main
+
+If you work in separate branches, push that branch directly to `main` when ready:
+
+```bash
+git checkout backend
+git fetch origin
+git rebase origin/main
+git push origin HEAD:main
+```
+
+```bash
+git checkout frontend
+git fetch origin
+git rebase origin/main
+git push origin HEAD:main
+```
+
+This keeps `main` updated continuously, and Render auto-deploys without manual redeploy steps.
+
 ## Environment Variables
 - `PORT=3000`
 - `ELEVENLABS_API_KEY=...`

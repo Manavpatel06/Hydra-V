@@ -15,7 +15,9 @@ const HYDRAWAV_DEFAULT_USERNAME = (process.env.HYDRAWAV_USERNAME || "").trim();
 const HYDRAWAV_DEFAULT_PASSWORD = typeof process.env.HYDRAWAV_PASSWORD === "string"
   ? process.env.HYDRAWAV_PASSWORD
   : "";
-const PY_AURA_API_BASE_URL = (process.env.PY_AURA_API_BASE_URL || "http://127.0.0.1:8010").trim();
+const PY_AURA_API_BASE_URL = normalizeHttpBaseUrl(
+  (process.env.PY_AURA_API_BASE_URL || "http://127.0.0.1:8010").trim()
+);
 const AURA_USE_PYTHON_ANALYTICS = (process.env.AURA_USE_PYTHON_ANALYTICS || "true").trim().toLowerCase() !== "false";
 const THERMAL_USE_PYTHON_ANALYTICS = (process.env.THERMAL_USE_PYTHON_ANALYTICS || "true").trim().toLowerCase() !== "false";
 const AURA_PYTHON_TIMEOUT_MS = Number(process.env.AURA_PYTHON_TIMEOUT_MS || 1500);
@@ -475,6 +477,23 @@ function normalizeBearerToken(token) {
   }
 
   return trimmed.startsWith("Bearer ") ? trimmed : `Bearer ${trimmed}`;
+}
+
+function normalizeHttpBaseUrl(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return `http://${trimmed}`;
 }
 
 function loadDotEnv(filePath) {
