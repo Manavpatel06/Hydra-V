@@ -9,9 +9,12 @@ export function buildThetaNarration({ sessionContext, protocolContext, biometric
 
   const lines = [
     `${athleteName}, stay with your breath while we move through the theta recovery phase.`,
-    `Your entrainment beat is ${round(beatHz, 2)} hertz, calibrated for nervous system downshift.`,
     `We are focusing support into your ${focusZone}.`
   ];
+
+  if (Number.isFinite(beatHz)) {
+    lines.splice(1, 0, `Your entrainment beat is ${round(beatHz, 2)} hertz, calibrated for nervous system downshift.`);
+  }
 
   if (heartRate !== null) {
     lines.push(`Current heart rate is around ${heartRate} beats per minute and settling.`);
@@ -39,9 +42,12 @@ export function buildPostSessionNarration({ sessionContext, protocolContext, bio
 
   const lines = [
     `${athleteName}, today's session is complete.`,
-    `We synchronized stimulation to your heartbeat and completed adaptive entrainment around ${round(beatHz, 2)} hertz.`,
     `Primary treatment focus was your ${focusZone}.`
   ];
+
+  if (Number.isFinite(beatHz)) {
+    lines.splice(1, 0, `We synchronized stimulation to your heartbeat and completed adaptive entrainment around ${round(beatHz, 2)} hertz.`);
+  }
 
   if (hrv !== null) {
     lines.push(`Your HRV proxy is ${hrv} milliseconds, showing recovery readiness tracking.`);

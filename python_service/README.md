@@ -1,11 +1,13 @@
-﻿# HYDRA-V Python Aura Analytics
+# HYDRA-V Python Analytics (Aura + Thermal)
 
-Optional high-performance analytics service for Feature 1 (Aura-Scan+).
+Optional high-performance analytics service for Feature 1 (Aura-Scan+) and Feature 5 (Fascial Thermal Mapping).
 
 ## What it does
 - Receives incremental rPPG + eye motion telemetry from the browser.
 - Computes HR, RR interval, RMSSD HRV, micro-saccade frequency, readiness score.
-- Optionally fuses RuView vitals (heart/breath rate) when `RUVIEW_API_BASE_URL` is set.
+- Fuses RuView-style local vitals (heart/breath rate) on-device (no external RuView API).
+- Receives short camera bursts for thermal mapping.
+- Computes dense Farneback optical-flow variance, chain links, and Sun/Moon pad recommendations.
 
 ## Setup
 
@@ -27,6 +29,10 @@ Default endpoint: `http://127.0.0.1:8010`
 ## Env Vars
 - `AURA_PY_HOST` (default `127.0.0.1`)
 - `AURA_PY_PORT` (default `8010`)
-- `RUVIEW_API_BASE_URL` (optional)
-- `RUVIEW_VITALS_PATH` (default `/api/v1/vital-signs`)
-- `RUVIEW_TIMEOUT_MS` (default `1200`)
+- `RUVIEW_LOCAL_FUSION_ENABLED` (default `true`)
+
+## Endpoints
+- `GET /health`
+- `POST /aura/reset`
+- `POST /aura/analyze`
+- `POST /thermal/analyze`

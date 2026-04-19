@@ -1,9 +1,9 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>HYDRA-V | Feature 1-4 Runtime</title>
+  <title>HYDRA-V | Recovery Flow Runtime</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -16,27 +16,34 @@
 <body>
   <main class="app-shell">
     <header class="hero">
-      <p class="kicker">HYDRA-V Recovery Intelligence</p>
-      <h1>Feature 1-4 Runtime</h1>
+      <p class="kicker">HYDRA-V Recovery Runtime</p>
+      <h1>Know -> Play -> Grow</h1>
       <p class="subtitle">
-        Aura-Scan+, Neural Handshake, Cardiac Gating+, and Neuroacoustic Entrainment integrated on one event bus.
+        60-second biometric intake, anatomy-mapped analysis, AR recovery game guidance, and adaptive continuity via Feature 6 + 7.
       </p>
+
+      <div class="flow-steps">
+        <div id="step-intake" class="step step-active">1. Intake Scan</div>
+        <div id="step-game" class="step">2. AR Recovery Game</div>
+        <div id="step-summary" class="step">3. Summary + Continuity</div>
+      </div>
+
       <div class="status-strip">
         <div>
           <span class="label">Aura-Scan</span>
           <span id="aura-status-pill" class="pill pill-idle">Idle</span>
         </div>
         <div>
+          <span class="label">Thermal Mapping</span>
+          <span id="thermal-status-pill" class="pill pill-idle">Idle</span>
+        </div>
+        <div>
           <span class="label">Neural Handshake</span>
           <span id="handshake-status-pill" class="pill pill-idle">Idle</span>
         </div>
         <div>
-          <span class="label">Cardiac Engine</span>
+          <span class="label">Cardiac Gating</span>
           <span id="cardiac-engine-status" class="pill pill-idle">Idle</span>
-        </div>
-        <div>
-          <span class="label">Device API</span>
-          <span id="device-api-status" class="pill pill-idle">Logged Out</span>
         </div>
         <div>
           <span class="label">BLE Link</span>
@@ -53,348 +60,213 @@
       </div>
     </header>
 
-    <section class="feature-grid">
-      <article class="panel full-span">
+    <section class="experience-layout">
+      <article class="panel anatomy-panel">
         <div class="panel-head">
-          <h2>Feature 1: Aura-Scan+</h2>
-          <p>60-second zero-wearable intake: rPPG HRV, symmetry delta, micro-saccade estimate, CNS readiness, and flagged zone map.</p>
+          <h2>Anatomy + Live Metrics</h2>
+          <p>Cold-zone mapping and biomechanical vitals.</p>
         </div>
 
-        <div class="camera-layout">
-          <div class="camera-stage">
-            <video id="aura-video" autoplay muted playsinline class="hidden-video"></video>
-            <canvas id="aura-camera-canvas" class="camera-canvas"></canvas>
-            <canvas id="neural-ghost-canvas" class="ghost-canvas"></canvas>
-          </div>
-          <div class="body-map-wrap">
-            <canvas id="aura-bodymap-canvas" class="bodymap-canvas"></canvas>
-          </div>
+        <div class="body-map-wrap">
+          <canvas id="aura-bodymap-canvas" class="bodymap-canvas"></canvas>
         </div>
 
-        <div class="panel-grid">
-          <label class="field">
-            <span>Scan Duration (sec)</span>
-            <input id="aura-scan-duration" type="number" min="15" max="180" step="1" value="60">
-          </label>
-          <label class="field">
-            <span>Cold Zone</span>
-            <input id="aura-cold-zone" type="text" value="Awaiting scan" readonly>
-          </label>
+        <div class="metric-grid">
+          <div class="metric"><span>Heart Rate</span><strong id="metric-aura-hr">-- bpm</strong></div>
+          <div class="metric"><span>HRV (RMSSD)</span><strong id="metric-aura-hrv">-- ms</strong></div>
+          <div class="metric"><span>Symmetry Delta</span><strong id="metric-aura-symmetry">-- %</strong></div>
+          <div class="metric"><span>Micro-Saccades</span><strong id="metric-aura-micro">-- Hz</strong></div>
+          <div class="metric"><span>Breath Rate</span><strong id="metric-aura-breath">-- /min</strong></div>
+          <div class="metric"><span>Readiness</span><strong id="metric-aura-readiness">-- / 10</strong></div>
+          <div class="metric"><span>rPPG Mode</span><strong id="metric-aura-algorithm">--</strong></div>
+          <div class="metric"><span>Vitals Source</span><strong id="metric-aura-source">--</strong></div>
         </div>
 
-        <div class="button-row">
-          <button id="aura-start-camera" type="button">Start Camera</button>
-          <button id="aura-stop-camera" type="button" class="ghost">Stop Camera</button>
-          <button id="aura-start-scan" type="button">Start 60s Scan</button>
-          <button id="aura-stop-scan" type="button" class="ghost">Stop Scan</button>
-        </div>
-
-        <div class="panel-grid compact-grid">
-          <div class="metric">
-            <span>Scan State</span>
-            <strong id="metric-aura-status">Idle</strong>
-          </div>
-          <div class="metric">
-            <span>Scan Progress</span>
-            <strong id="metric-aura-progress">0%</strong>
-          </div>
-          <div class="metric">
-            <span>Heart Rate</span>
-            <strong id="metric-aura-hr">-- bpm</strong>
-          </div>
-          <div class="metric">
-            <span>HRV (RMSSD)</span>
-            <strong id="metric-aura-hrv">-- ms</strong>
-          </div>
-          <div class="metric">
-            <span>Symmetry Delta</span>
-            <strong id="metric-aura-symmetry">-- %</strong>
-          </div>
-          <div class="metric">
-            <span>Micro-Saccades</span>
-            <strong id="metric-aura-micro">-- Hz</strong>
-          </div>
-          <div class="metric">
-            <span>Breath Rate</span>
-            <strong id="metric-aura-breath">-- /min</strong>
-          </div>
-          <div class="metric">
-            <span>CNS Readiness</span>
-            <strong id="metric-aura-readiness">-- / 10</strong>
-          </div>
-          <div class="metric">
-            <span>rPPG Mode</span>
-            <strong id="metric-aura-algorithm">--</strong>
-          </div>
-          <div class="metric">
-            <span>Vitals Source</span>
-            <strong id="metric-aura-source">--</strong>
-          </div>
+        <div class="metric-grid compact">
+          <div class="metric"><span>Live HR</span><strong id="metric-heart-rate">-- bpm</strong></div>
+          <div class="metric"><span>Live RR</span><strong id="metric-rr">-- ms</strong></div>
+          <div class="metric"><span>Live Micro</span><strong id="metric-micro">-- Hz</strong></div>
+          <div class="metric"><span>Plasticity</span><strong id="metric-plasticity">-- / 10</strong></div>
         </div>
       </article>
 
-      <article class="panel">
+      <article class="panel camera-panel">
         <div class="panel-head">
-          <h2>Feature 2: Neural Handshake</h2>
-          <p>Record healthy-side motion and render mirrored glowing ghost to prime injured-side cortex.</p>
+          <h2>Camera + AR Overlays</h2>
+          <p>Aura scan, thermal map, neural ghost, and recovery game overlay run on this live feed.</p>
         </div>
 
-        <div class="panel-grid">
-          <label class="field">
-            <span>Target Zone</span>
-            <select id="handshake-zone">
-              <option value="shoulder">Shoulder</option>
-              <option value="hip">Hip</option>
-              <option value="knee">Knee</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Injured Side</span>
-            <select id="handshake-injured-side">
-              <option value="left">Left</option>
-              <option value="right">Right</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Record Duration (sec)</span>
-            <input id="handshake-duration" type="number" min="4" max="20" step="1" value="10">
-          </label>
+        <div class="camera-stage">
+          <video id="aura-video" autoplay muted playsinline class="hidden-video"></video>
+          <canvas id="aura-camera-canvas" class="camera-canvas"></canvas>
+          <canvas id="thermal-overlay-canvas" class="thermal-canvas"></canvas>
+          <canvas id="neural-ghost-canvas" class="ghost-canvas"></canvas>
+          <canvas id="game-overlay-canvas" class="game-canvas"></canvas>
         </div>
 
-        <div class="button-row">
-          <button id="handshake-record" type="button">Record Healthy Motion</button>
-          <button id="handshake-stop" type="button" class="ghost">Stop Handshake</button>
-        </div>
-
-        <div class="panel-grid compact-grid">
-          <div class="metric">
-            <span>Status</span>
-            <strong id="metric-handshake-status">Idle</strong>
+        <div id="stage-intake-panel" class="stage-panel">
+          <div class="panel-head inline">
+            <h3>Intake</h3>
+            <p id="intake-progress-label">Ready for 60-second scan.</p>
           </div>
-          <div class="metric">
-            <span>Progress</span>
-            <strong id="metric-handshake-progress">0%</strong>
+
+          <div class="controls-grid">
+            <label class="field">
+              <span>Scan Duration (sec)</span>
+              <input id="intake-scan-duration" type="number" min="20" max="180" step="1" value="60">
+            </label>
           </div>
-          <div class="metric">
-            <span>Cold Zone Source</span>
-            <strong id="metric-handshake-zone-source">Manual</strong>
+
+          <div class="button-row">
+            <button id="start-camera" type="button">Start Camera</button>
+            <button id="stop-camera" type="button" class="ghost">Stop Camera</button>
+            <button id="start-intake-scan" type="button">Start Intake Scan</button>
+          </div>
+
+          <article class="analysis-box">
+            <h4>Analysis Overlay</h4>
+            <p id="intake-analysis-text">Complete the intake scan to generate body-map analysis and session targets.</p>
+          </article>
+
+          <div class="button-row">
+            <button id="intake-next-button" type="button" disabled>Next: Start AR Recovery Game</button>
+          </div>
+        </div>
+
+        <div id="stage-game-panel" class="stage-panel hidden">
+          <div class="panel-head inline">
+            <h3>AR Recovery Game</h3>
+            <p id="game-status">Press start to launch guided action sequence.</p>
+          </div>
+
+          <article class="analysis-box">
+            <h4 id="game-action-title">Action</h4>
+            <p id="game-action-desc">The next rehab action will appear here.</p>
+          </article>
+
+          <div class="game-stats">
+            <div><span>Score</span><strong id="game-score">0%</strong></div>
+            <div><span>Reps</span><strong id="game-reps">0 / 0</strong></div>
+            <div><span>Actions</span><strong id="game-actions-count">0 / 0</strong></div>
+          </div>
+
+          <div class="progress-track"><div id="game-progress-fill"></div></div>
+
+          <div class="button-row">
+            <button id="game-start-button" type="button">Start Guided Game</button>
+            <button id="game-stop-button" type="button" class="ghost">Stop Game</button>
+          </div>
+        </div>
+
+        <div id="stage-postscan-panel" class="stage-panel hidden">
+          <div class="panel-head inline">
+            <h3>Post-Session Recheck</h3>
+            <p id="postscan-status">Collecting post-session biometrics...</p>
+          </div>
+        </div>
+
+        <div id="stage-summary-panel" class="stage-panel hidden">
+          <div class="panel-head inline">
+            <h3>Session Summary</h3>
+            <p id="summary-status">Session completed.</p>
+          </div>
+
+          <div class="button-row">
+            <button id="summary-play-voice" type="button">Play Summary Voice</button>
+            <button id="summary-restart" type="button" class="ghost">Start New Session</button>
           </div>
         </div>
       </article>
+    </section>
 
-      <article class="panel">
-        <div class="panel-head">
-          <h2>Feature 3: Cardiac Gating+</h2>
-          <p>T-wave synchronized pulse delivery (80-120 ms after each R-peak).</p>
-        </div>
+    <section id="summary-section" class="panel hidden">
+      <div class="panel-head">
+        <h2>Improvement + Feature 6/7 Continuity</h2>
+        <p>Outcome deltas, adaptive protocol recommendation, and Solace Digital Garden growth.</p>
+      </div>
 
+      <div class="metric-grid">
+        <div class="metric"><span>HRV Delta</span><strong id="summary-hrv-delta">--</strong></div>
+        <div class="metric"><span>Symmetry Gain</span><strong id="summary-symmetry-gain">--</strong></div>
+        <div class="metric"><span>Micro Stability Gain</span><strong id="summary-micro-gain">--</strong></div>
+        <div class="metric"><span>Readiness Gain</span><strong id="summary-readiness-gain">--</strong></div>
+        <div class="metric"><span>ROM Gain (Game)</span><strong id="summary-rom-gain">--</strong></div>
+        <div class="metric"><span>Game Score</span><strong id="summary-game-score">--</strong></div>
+      </div>
+
+      <div class="summary-grid">
+        <article class="summary-card">
+          <h3>Feature 7: Adaptive Protocol AI</h3>
+          <div class="metric-grid compact">
+            <div class="metric"><span>Model</span><strong id="rec-model-mode">--</strong></div>
+            <div class="metric"><span>Expected Improvement</span><strong id="rec-improvement">--</strong></div>
+            <div class="metric"><span>Confidence</span><strong id="rec-confidence">--</strong></div>
+            <div class="metric"><span>Uncertainty</span><strong id="rec-uncertainty">--</strong></div>
+          </div>
+
+          <h4>Rationale</h4>
+          <ul id="rec-rationale" class="text-list"></ul>
+
+          <h4>Warnings</h4>
+          <ul id="rec-warnings" class="text-list"></ul>
+
+          <h4>Parameter Confidence Map</h4>
+          <div id="rec-params" class="confidence-map"></div>
+        </article>
+
+        <article class="summary-card">
+          <h3>Feature 6: Solace Digital Garden+</h3>
+          <canvas id="garden-canvas" class="garden-canvas" width="900" height="420"></canvas>
+          <div id="garden-milestones" class="milestones"></div>
+          <div id="garden-species" class="species-list"></div>
+        </article>
+      </div>
+    </section>
+
+    <details class="panel tech-drawer">
+      <summary>Device + Voice Controls</summary>
+
+      <div class="controls-grid">
         <label class="field">
           <span>Gate Offset (ms)</span>
           <input id="gate-offset" type="range" min="80" max="120" step="1" value="100">
           <strong id="gate-offset-value">100 ms</strong>
         </label>
 
-        <div class="panel-grid">
-          <label class="field">
-            <span>Device Name Prefix</span>
-            <input id="device-prefix" type="text" value="Hydrawav3" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>BLE Service UUID</span>
-            <input id="service-uuid" type="text" value="6e400001-b5a3-f393-e0a9-e50e24dcca9e" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>BLE Characteristic UUID</span>
-            <input id="char-uuid" type="text" value="6e400002-b5a3-f393-e0a9-e50e24dcca9e" autocomplete="off">
-          </label>
-        </div>
-
-        <div class="button-row">
-          <button id="connect-ble" type="button">Connect BLE</button>
-          <button id="disconnect-ble" type="button" class="ghost">Disconnect</button>
-          <button id="toggle-gating" type="button" class="warn">Start Gating</button>
-        </div>
-
-        <div class="panel-grid compact-grid">
-          <div class="metric">
-            <span>Gate Pulses Sent</span>
-            <strong id="metric-gate-count">0</strong>
-          </div>
-          <div class="metric">
-            <span>Last Gate Delay</span>
-            <strong id="metric-last-delay">-- ms</strong>
-          </div>
-          <div class="metric">
-            <span>Transport Failures</span>
-            <strong id="metric-ble-failures">0</strong>
-          </div>
-          <div class="metric">
-            <span>Latest Sequence ID</span>
-            <strong id="metric-seq-id">--</strong>
-          </div>
-        </div>
-
-        <hr>
-
-        <div class="panel-head">
-          <h3>HydraWav MQTT API (Official)</h3>
-          <p>From HydraWav docs: login, then publish stringified payload to topic <code>HydraWav3Pro/config</code>.</p>
-        </div>
-
-        <div class="panel-grid">
-          <label class="field">
-            <span>HydraWav API Base URL</span>
-            <input id="mqtt-api-base-url" type="text" value="" placeholder="https://your-hydrawav-host.com" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>HydraWav Username</span>
-            <input id="mqtt-username" type="text" value="" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>HydraWav Password</span>
-            <input id="mqtt-password" type="password" value="" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>MQTT Topic</span>
-            <input id="mqtt-topic" type="text" value="HydraWav3Pro/config" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>Device MAC</span>
-            <input id="mqtt-device-mac" type="text" value="74:4D:BD:A0:A3:EC" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>Gate Telemetry Topic (Optional)</span>
-            <input id="mqtt-gate-topic" type="text" value="HydraWav3Pro/gate" autocomplete="off">
-          </label>
-        </div>
-
-        <label class="checkbox">
-          <input id="mqtt-gate-enabled" type="checkbox">
-          <span>Publish gate pulse telemetry on each heartbeat (experimental)</span>
+        <label class="field">
+          <span>Device Name Prefix</span>
+          <input id="device-prefix" type="text" value="Hydrawav3" autocomplete="off">
         </label>
 
-        <div class="button-row">
-          <button id="mqtt-login" type="button">Login API</button>
-          <button id="mqtt-start" type="button">MQTT Start</button>
-          <button id="mqtt-pause" type="button" class="ghost">Pause</button>
-          <button id="mqtt-resume" type="button" class="ghost">Resume</button>
-          <button id="mqtt-stop" type="button" class="ghost">Stop</button>
-        </div>
-      </article>
+        <label class="field">
+          <span>BLE Service UUID</span>
+          <input id="service-uuid" type="text" value="6e400001-b5a3-f393-e0a9-e50e24dcca9e" autocomplete="off">
+        </label>
 
-      <article class="panel">
-        <div class="panel-head">
-          <h2>Feature 4: Neuroacoustic Entrainment</h2>
-          <p>Adaptive binaural programming with auto phase progression.</p>
-        </div>
-
-        <div class="panel-grid">
-          <label class="field">
-            <span>Carrier Frequency (Hz)</span>
-            <input id="carrier-frequency" type="number" min="80" max="520" step="1" value="220">
-          </label>
-          <label class="field">
-            <span>Pre Duration (sec)</span>
-            <input id="phase-pre" type="number" min="5" max="900" step="1" value="45">
-          </label>
-          <label class="field">
-            <span>During Duration (sec)</span>
-            <input id="phase-during" type="number" min="10" max="3600" step="1" value="120">
-          </label>
-          <label class="field">
-            <span>Post Duration (sec)</span>
-            <input id="phase-post" type="number" min="5" max="900" step="1" value="45">
-          </label>
-        </div>
-
-        <div class="button-row">
-          <button id="enable-audio" type="button">Enable Audio</button>
-          <button id="start-neuro-session" type="button">Start Session</button>
-          <button id="stop-neuro-session" type="button" class="ghost">Stop Session</button>
-        </div>
-
-        <div class="panel-grid compact-grid">
-          <div class="metric">
-            <span>Current Beat</span>
-            <strong id="metric-beat-hz">-- Hz</strong>
-          </div>
-          <div class="metric">
-            <span>Arousal Index</span>
-            <strong id="metric-arousal">--</strong>
-          </div>
-          <div class="metric">
-            <span>Phase Time Left</span>
-            <strong id="metric-phase-time">--</strong>
-          </div>
-          <div class="metric">
-            <span>Session Completion</span>
-            <strong id="metric-session-complete">0%</strong>
-          </div>
-        </div>
-
-        <hr>
-
-        <div class="panel-head">
-          <h3>ElevenLabs Narration</h3>
-          <p>Use proxy endpoint so API keys stay server-side.</p>
-        </div>
+        <label class="field">
+          <span>BLE Characteristic UUID</span>
+          <input id="char-uuid" type="text" value="6e400002-b5a3-f393-e0a9-e50e24dcca9e" autocomplete="off">
+        </label>
 
         <label class="checkbox">
           <input id="voice-enabled" type="checkbox">
-          <span>Enable personalized narration</span>
+          <span>Enable ElevenLabs narration</span>
         </label>
-
-        <div class="panel-grid">
-          <label class="field">
-            <span>Proxy URL</span>
-            <input id="voice-proxy-url" type="text" value="/api/voice/elevenlabs/tts" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>Voice ID</span>
-            <input id="voice-id" type="text" value="EXAVITQu4vr4xnSDxMaL" autocomplete="off">
-          </label>
-          <label class="field">
-            <span>Model ID</span>
-            <input id="voice-model-id" type="text" value="eleven_turbo_v2_5" autocomplete="off">
-          </label>
-        </div>
-
-        <div class="button-row">
-          <button id="test-theta-note" type="button" class="ghost">Play Theta Narrative</button>
-          <button id="test-post-note" type="button" class="ghost">Play Post-Session Note</button>
-        </div>
-      </article>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Integration Bridge</h2>
-        <p>Other teams can publish or subscribe using <code>window.HydraVBridge</code> and <code>hydrav:*</code> events.</p>
       </div>
-      <div class="panel-grid compact-grid">
-        <div class="metric">
-          <span>Last Heart Rate</span>
-          <strong id="metric-heart-rate">-- bpm</strong>
-        </div>
-        <div class="metric">
-          <span>Last RR Interval</span>
-          <strong id="metric-rr">-- ms</strong>
-        </div>
-        <div class="metric">
-          <span>Micro-Saccades</span>
-          <strong id="metric-micro">-- Hz</strong>
-        </div>
-        <div class="metric">
-          <span>Nervous System Plasticity</span>
-          <strong id="metric-plasticity">-- / 10</strong>
-        </div>
-      </div>
+
       <div class="button-row">
-        <button id="emit-sample-frame" type="button" class="ghost">Emit Sample Biometric Frame</button>
-        <button id="start-sim-heartbeat" type="button">Start Heartbeat Simulator</button>
-        <button id="stop-sim-heartbeat" type="button" class="ghost">Stop Simulator</button>
+        <button id="connect-ble" type="button">Connect BLE</button>
+        <button id="disconnect-ble" type="button" class="ghost">Disconnect BLE</button>
+        <button id="toggle-gating" type="button" class="ghost">Toggle Gating</button>
       </div>
-    </section>
+
+      <div class="metric-grid compact">
+        <div class="metric"><span>Gate Count</span><strong id="metric-gate-count">0</strong></div>
+        <div class="metric"><span>Last Delay</span><strong id="metric-last-delay">-- ms</strong></div>
+        <div class="metric"><span>BLE Failures</span><strong id="metric-ble-failures">0</strong></div>
+        <div class="metric"><span>Sequence</span><strong id="metric-seq-id">0</strong></div>
+      </div>
+    </details>
 
     <section class="panel">
       <div class="panel-head">
@@ -402,10 +274,6 @@
       </div>
       <ul id="runtime-log" class="runtime-log"></ul>
     </section>
-
-    <footer class="footnote">
-      HYDRA-V wellness software. Supports recovery, mobility, and performance workflows.
-    </footer>
   </main>
 
   <script type="module" src="./app.js"></script>

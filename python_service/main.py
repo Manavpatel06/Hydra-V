@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.ruview_client import RuViewClient
 from app.signal_processing import SessionState, compute_metrics, update_state
+from app.thermal_mapping import analyze_fascial_thermal
 
 load_dotenv()
 
@@ -45,6 +46,38 @@ class ResetRequest(BaseModel):
     session_id: str
 
 
+class ThermalFrame(BaseModel):
+    timestamp_ms: float
+    image_base64: str
+
+
+class ThermalLandmark(BaseModel):
+    x: float
+    y: float
+    z: float | None = None
+    visibility: float | None = None
+
+
+class ThermalPoseFrame(BaseModel):
+    timestamp_ms: float
+    landmarks: list[ThermalLandmark] = Field(default_factory=list)
+
+
+class ThermalContext(BaseModel):
+    flagged_zones: list[dict[str, Any]] = Field(default_factory=list)
+    symmetry_delta_pct: float | None = None
+    readiness_score: float | None = None
+
+
+class ThermalAnalyzeRequest(BaseModel):
+    session_id: str | None = None
+    timestamp_ms: float | None = None
+    scan_duration_sec: float = 8.0
+    frames: list[ThermalFrame] = Field(default_factory=list)
+    pose_frames: list[ThermalPoseFrame] = Field(default_factory=list)
+    aura_context: ThermalContext = Field(default_factory=ThermalContext)
+
+
 @dataclass
 class RuntimeStore:
     sessions: dict[str, SessionState]
@@ -53,15 +86,16 @@ class RuntimeStore:
 store = RuntimeStore(sessions={})
 ruview_client = RuViewClient()
 
-app = FastAPI(title="HYDRA-V Python Aura Analytics", version="0.1.0")
+app = FastAPI(title="HYDRA-V Python Analytics (Aura + Thermal)", version="0.2.0")
 
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {
       "ok": True,
-      "service": "HYDRA-V Python Aura Analytics",
+      "service": "HYDRA-V Python Analytics (Aura + Thermal)",
       "ruview_enabled": ruview_client.enabled,
+      "ruview_mode": ruview_client.mode,
       "sessions": len(store.sessions)
     }
 
@@ -91,7 +125,7 @@ async def aura_analyze(payload: AnalyzeRequest) -> dict[str, Any]:
       "pose_summary": payload.pose_summary.model_dump()
     })
 
-    ruview_data = await ruview_client.fetch_vitals(payload.timestamp_ms)
+    ruview_data = await ruview_client.fetch_vitals(payload.timestamp_ms, state)
 
     metrics = compute_metrics(
       state=state,
@@ -105,6 +139,32 @@ async def aura_analyze(payload: AnalyzeRequest) -> dict[str, Any]:
       "metrics": metrics,
       "ruview": ruview_data,
       "python_analytics_enabled": True
+    }
+
+
+@app.post("/thermal/analyze")
+async def thermal_analyze(payload: ThermalAnalyzeRequest) -> dict[str, Any]:
+    if not payload.frames:
+        raise HTTPException(status_code=400, detail="frames are required")
+
+    try:
+        metrics = analyze_fascial_thermal(
+            frames=[frame.model_dump() for frame in payload.frames],
+            pose_frames=[frame.model_dump() for frame in payload.pose_frames],
+            aura_context=payload.aura_context.model_dump(),
+            scan_duration_sec=payload.scan_duration_sec,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Thermal analysis failed: {error}") from error
+
+    session_id = payload.session_id or f"thermal-{int(payload.timestamp_ms or 0)}"
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "metrics": metrics,
+        "python_analytics_enabled": True,
     }
 
 

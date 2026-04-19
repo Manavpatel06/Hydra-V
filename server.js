@@ -13,7 +13,9 @@ const PORT = Number(process.env.PORT || 3000);
 const HYDRAWAV_DEFAULT_BASE_URL = (process.env.HYDRAWAV_API_BASE_URL || "").trim();
 const PY_AURA_API_BASE_URL = (process.env.PY_AURA_API_BASE_URL || "http://127.0.0.1:8010").trim();
 const AURA_USE_PYTHON_ANALYTICS = (process.env.AURA_USE_PYTHON_ANALYTICS || "true").trim().toLowerCase() !== "false";
+const THERMAL_USE_PYTHON_ANALYTICS = (process.env.THERMAL_USE_PYTHON_ANALYTICS || "true").trim().toLowerCase() !== "false";
 const AURA_PYTHON_TIMEOUT_MS = Number(process.env.AURA_PYTHON_TIMEOUT_MS || 1500);
+const THERMAL_PYTHON_TIMEOUT_MS = Number(process.env.THERMAL_PYTHON_TIMEOUT_MS || 9000);
 let hydrawavCachedAccessToken = null;
 let hydrawavCachedBaseUrl = HYDRAWAV_DEFAULT_BASE_URL;
 
@@ -37,12 +39,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/health") {
       json(res, 200, {
         ok: true,
-        service: "HYDRA-V Feature 1-4 runtime",
+        service: "HYDRA-V Feature 1-5 runtime",
         elevenLabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY),
         hydrawavApiBaseUrlConfigured: Boolean(HYDRAWAV_DEFAULT_BASE_URL),
         hydrawavTokenCached: Boolean(hydrawavCachedAccessToken),
         auraPythonEnabled: AURA_USE_PYTHON_ANALYTICS,
-        auraPythonApiBaseUrl: PY_AURA_API_BASE_URL
+        thermalPythonEnabled: THERMAL_USE_PYTHON_ANALYTICS,
+        auraPythonApiBaseUrl: PY_AURA_API_BASE_URL,
+        thermalPythonTimeoutMs: THERMAL_PYTHON_TIMEOUT_MS
       });
       return;
     }
@@ -63,12 +67,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/aura/reset") {
-      await handleAuraPythonProxy(req, res, "/aura/reset");
+      await handleAuraPythonProxy(req, res, "/aura/reset", null, AURA_USE_PYTHON_ANALYTICS, "Aura Python analytics is disabled.");
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/aura/analyze") {
-      await handleAuraPythonProxy(req, res, "/aura/analyze");
+      await handleAuraPythonProxy(req, res, "/aura/analyze", null, AURA_USE_PYTHON_ANALYTICS, "Aura Python analytics is disabled.");
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/thermal/analyze") {
+      await handleAuraPythonProxy(req, res, "/thermal/analyze", THERMAL_PYTHON_TIMEOUT_MS, THERMAL_USE_PYTHON_ANALYTICS, "Thermal Python analytics is disabled.");
       return;
     }
 
@@ -288,11 +297,11 @@ async function handleHydrawavPublish(req, res) {
   }
 }
 
-async function handleAuraPythonProxy(req, res, endpointPath) {
-  if (!AURA_USE_PYTHON_ANALYTICS) {
+async function handleAuraPythonProxy(req, res, endpointPath, timeoutOverrideMs = null, enabled = true, disabledMessage = "Python analytics is disabled.") {
+  if (!enabled) {
     json(res, 503, {
-      error: "Python analytics is disabled.",
-      details: "Set AURA_USE_PYTHON_ANALYTICS=true to enable."
+      error: disabledMessage,
+      details: "Set the corresponding *_USE_PYTHON_ANALYTICS variable to true to enable."
     });
     return;
   }
@@ -301,7 +310,7 @@ async function handleAuraPythonProxy(req, res, endpointPath) {
     const body = await readJson(req);
     const targetUrl = `${PY_AURA_API_BASE_URL.replace(/\/+$/, "")}${endpointPath}`;
     const controller = new AbortController();
-    const timeoutMs = Math.max(AURA_PYTHON_TIMEOUT_MS, 500);
+    const timeoutMs = Math.max(Number(timeoutOverrideMs || AURA_PYTHON_TIMEOUT_MS), 500);
     const timeoutId = setTimeout(() => {
       controller.abort(new Error("Aura Python request timed out."));
     }, timeoutMs);
@@ -398,7 +407,7 @@ function readJson(req) {
 
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 1_000_000) {
+      if (body.length > 15_000_000) {
         reject(new Error("Request payload too large."));
       }
     });

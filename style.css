@@ -290,6 +290,7 @@ button.warn {
 }
 
 .camera-canvas,
+.thermal-canvas,
 .ghost-canvas {
   position: absolute;
   inset: 0;
@@ -297,8 +298,14 @@ button.warn {
   height: 100%;
 }
 
+.thermal-canvas {
+  pointer-events: none;
+  z-index: 2;
+}
+
 .ghost-canvas {
   pointer-events: none;
+  z-index: 3;
 }
 
 .body-map-wrap {

@@ -11,6 +11,7 @@ export class CardiacGatingEngine {
     this.isActive = false;
     this.sequenceId = 0;
     this.pendingTimeouts = new Set();
+    this.warnedTransportUnavailable = false;
 
     this.latestBiometrics = {
       rrIntervalMs: null,
@@ -21,11 +22,13 @@ export class CardiacGatingEngine {
 
   start() {
     this.isActive = true;
+    this.warnedTransportUnavailable = false;
     this.emitStatus();
   }
 
   stop() {
     this.isActive = false;
+    this.warnedTransportUnavailable = false;
     for (const timeoutId of this.pendingTimeouts) {
       clearTimeout(timeoutId);
     }
@@ -91,6 +94,19 @@ export class CardiacGatingEngine {
   }
 
   async fireGatePulse({ rPeakTimestampMs, rrIntervalMs, heartRateBpm }) {
+    if (!this.bleClient.isConnected()) {
+      if (!this.warnedTransportUnavailable) {
+        this.warnedTransportUnavailable = true;
+        this.eventBus.emit(EVENTS.WARNING, {
+          scope: "cardiac-gating",
+          message: "Gate pulses are paused until BLE transport is connected."
+        });
+      }
+      this.emitStatus();
+      return;
+    }
+    this.warnedTransportUnavailable = false;
+
     this.sequenceId += 1;
 
     const payload = {
@@ -102,20 +118,16 @@ export class CardiacGatingEngine {
       heartRateBpm
     };
 
-    let transport = "local";
-    if (this.bleClient.isConnected()) {
-      try {
-        await this.bleClient.sendGateSignal(payload);
-        transport = "ble";
-      } catch (error) {
-        this.bleClient.recordFailure(error);
-        throw error;
-      }
+    try {
+      await this.bleClient.sendGateSignal(payload);
+    } catch (error) {
+      this.bleClient.recordFailure(error);
+      throw error;
     }
 
     this.eventBus.emit(EVENTS.CARDIAC_GATE_FIRED, {
       ...payload,
-      transport,
+      transport: "ble",
       effectiveDelayMs: round(payload.gateTimestampMs - payload.rPeakTimestampMs, 2)
     });
 

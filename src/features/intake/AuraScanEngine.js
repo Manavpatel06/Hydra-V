@@ -473,7 +473,7 @@ export class AuraScanEngine {
       symmetryDeltaPct: backendMetrics.symmetryDeltaPct ?? localMetrics?.symmetryDeltaPct ?? null,
       flaggedZones: backendMetrics.flaggedZones ?? localMetrics?.flaggedZones ?? [],
       readinessScore: backendMetrics.readinessScore ?? localMetrics?.readinessScore ?? null,
-      cnsFatigue: backendMetrics.cnsFatigue ?? localMetrics?.cnsFatigue ?? false,
+      cnsFatigue: backendMetrics.cnsFatigue ?? localMetrics?.cnsFatigue ?? null,
       breathRatePerMin: backendMetrics.breathRatePerMin ?? localMetrics?.breathRatePerMin ?? null,
       vitalsSource: backendMetrics.vitalsSource ?? null
     };
@@ -492,6 +492,8 @@ export class AuraScanEngine {
       }))
       : null;
 
+    const cnsFatigue = typeof metrics.cns_fatigue === "boolean" ? metrics.cns_fatigue : null;
+
     return {
       algorithm: metrics.algorithm ?? null,
       heartRateBpm: asFinite(metrics.heart_rate_bpm),
@@ -501,7 +503,7 @@ export class AuraScanEngine {
       symmetryDeltaPct: asFinite(metrics.symmetry_delta_pct),
       flaggedZones,
       readinessScore: asFinite(metrics.readiness_score),
-      cnsFatigue: Boolean(metrics.cns_fatigue),
+      cnsFatigue,
       breathRatePerMin: asFinite(metrics.breath_rate_per_min),
       vitalsSource: metrics.vitals_source ?? null
     };
@@ -610,7 +612,7 @@ export class AuraScanEngine {
     const microsaccadeHz = this.computeMicrosaccadeHz();
 
     const readiness = computeReadinessScore({
-      hrvRmssdMs: hrvRmssdMs ?? (rrIntervalMs ? rrIntervalMs / 12 : 20),
+      hrvRmssdMs,
       symmetryDeltaPct: symmetry.deltaPct,
       microsaccadeHz
     });
@@ -623,10 +625,10 @@ export class AuraScanEngine {
       rrIntervalMs: Number.isFinite(rrIntervalMs) ? round(rrIntervalMs, 1) : null,
       hrvRmssdMs: Number.isFinite(hrvRmssdMs) ? round(hrvRmssdMs, 1) : null,
       microsaccadeHz: Number.isFinite(microsaccadeHz) ? round(microsaccadeHz, 3) : null,
-      symmetryDeltaPct: round(symmetry.deltaPct, 2),
+      symmetryDeltaPct: Number.isFinite(symmetry.deltaPct) ? round(symmetry.deltaPct, 2) : null,
       flaggedZones: symmetry.flaggedZones,
-      readinessScore: round(readiness, 2),
-      cnsFatigue: Number.isFinite(microsaccadeHz) ? microsaccadeHz < 0.5 : false
+      readinessScore: Number.isFinite(readiness) ? round(readiness, 2) : null,
+      cnsFatigue: Number.isFinite(microsaccadeHz) ? microsaccadeHz < 0.5 : null
     };
   }
 
@@ -668,7 +670,7 @@ export class AuraScanEngine {
     }
 
     return {
-      deltaPct: deltas.length ? deltas.reduce((sum, value) => sum + value, 0) / deltas.length : 0,
+      deltaPct: deltas.length ? deltas.reduce((sum, value) => sum + value, 0) / deltas.length : null,
       flaggedZones: flagged
     };
   }

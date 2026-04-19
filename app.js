@@ -12,57 +12,7 @@ import { ElevenLabsClient } from "./src/features/neuro/ElevenLabsClient.js";
 import { NarrationManager } from "./src/features/neuro/NarrationManager.js";
 import { buildPostSessionNarration, buildThetaNarration } from "./src/features/neuro/NarrationBuilder.js";
 import { NeuroacousticEngine } from "./src/features/neuro/NeuroacousticEngine.js";
-
-class HeartbeatSimulator {
-  constructor(onFrame) {
-    this.onFrame = onFrame;
-    this.timeoutId = null;
-    this.running = false;
-    this.baseBpm = 72;
-  }
-
-  start(baseBpm = 72) {
-    if (this.running) {
-      return;
-    }
-
-    this.running = true;
-    this.baseBpm = clamp(baseBpm, 40, 180);
-    this.scheduleNextBeat();
-  }
-
-  stop() {
-    this.running = false;
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId);
-      this.timeoutId = null;
-    }
-  }
-
-  scheduleNextBeat() {
-    if (!this.running) {
-      return;
-    }
-
-    const jitter = (Math.random() - 0.5) * 80;
-    const rrMs = clamp(60000 / this.baseBpm + jitter, 400, 1500);
-
-    this.timeoutId = setTimeout(() => {
-      const heartRateBpm = 60000 / rrMs;
-      const frame = {
-        timestampMs: performance.now(),
-        rPeakDetected: true,
-        rrIntervalMs: rrMs,
-        heartRateBpm,
-        hrvRmssdMs: clamp(32 + (Math.random() - 0.5) * 10, 15, 90),
-        microsaccadeHz: clamp(0.65 + (Math.random() - 0.5) * 0.35, 0.2, 2.5)
-      };
-
-      this.onFrame(frame);
-      this.scheduleNextBeat();
-    }, rrMs);
-  }
-}
+import { FascialThermalEngine } from "./src/features/thermal/FascialThermalEngine.js";
 
 const eventBus = new HydraEventBus(window);
 
@@ -77,6 +27,18 @@ const auraScanEngine = new AuraScanEngine({
     resetEndpoint: DEFAULTS.auraScan.resetProxyUrl,
     backendIntervalMs: DEFAULTS.auraScan.analyticsIntervalMs
   }
+});
+
+const thermalEngine = new FascialThermalEngine({
+  eventBus,
+  sourceCanvasEl: byId("aura-camera-canvas"),
+  overlayCanvasEl: byId("thermal-overlay-canvas"),
+  getPoseLandmarks: () => auraScanEngine.getLatestPoseLandmarks(),
+  getAuraMetrics: () => auraScanEngine.getLatestMetrics(),
+  analyzeEndpoint: DEFAULTS.thermal.analyzeProxyUrl,
+  sampleFps: DEFAULTS.thermal.sampleFps,
+  maxFrames: DEFAULTS.thermal.maxFrames,
+  defaultScanDurationSec: DEFAULTS.thermal.scanDurationSec
 });
 
 const neuralHandshakeEngine = new NeuralHandshakeEngine({
@@ -118,10 +80,6 @@ const narrationManager = new NarrationManager({
   elevenLabsClient
 });
 
-const simulator = new HeartbeatSimulator((frame) => {
-  publishBiometricFrame(frame);
-});
-
 const state = {
   sessionContext: {
     athleteName: "Athlete",
@@ -138,6 +96,15 @@ const state = {
     progress: 0,
     coldZone: "Awaiting scan",
     algorithm: "--"
+  },
+  thermal: {
+    status: "idle",
+    progress: 0,
+    frameCount: 0,
+    topZone: "Awaiting thermal scan",
+    sunPad: "--",
+    moonPad: "--",
+    quality: "--"
   },
   handshake: {
     status: "idle",
@@ -171,6 +138,7 @@ const state = {
 
 const elements = {
   auraStatusPill: byId("aura-status-pill"),
+  thermalStatusPill: byId("thermal-status-pill"),
   handshakeStatusPill: byId("handshake-status-pill"),
   cardiacEngineStatus: byId("cardiac-engine-status"),
   deviceApiStatus: byId("device-api-status"),
@@ -200,6 +168,17 @@ const elements = {
   metricAuraReadiness: byId("metric-aura-readiness"),
   metricAuraAlgorithm: byId("metric-aura-algorithm"),
   metricAuraSource: byId("metric-aura-source"),
+
+  thermalDurationInput: byId("thermal-scan-duration"),
+  thermalStartButton: byId("thermal-start-scan"),
+  thermalStopButton: byId("thermal-stop-scan"),
+  thermalClearOverlayButton: byId("thermal-clear-overlay"),
+  metricThermalStatus: byId("metric-thermal-status"),
+  metricThermalProgress: byId("metric-thermal-progress"),
+  metricThermalTopZone: byId("metric-thermal-top-zone"),
+  metricThermalSunPad: byId("metric-thermal-sun-pad"),
+  metricThermalMoonPad: byId("metric-thermal-moon-pad"),
+  metricThermalQuality: byId("metric-thermal-quality"),
 
   handshakeZoneSelect: byId("handshake-zone"),
   handshakeInjuredSideSelect: byId("handshake-injured-side"),
@@ -256,10 +235,6 @@ const elements = {
   voiceModelInput: byId("voice-model-id"),
   testThetaButton: byId("test-theta-note"),
   testPostButton: byId("test-post-note"),
-
-  emitSampleFrameButton: byId("emit-sample-frame"),
-  startSimHeartbeatButton: byId("start-sim-heartbeat"),
-  stopSimHeartbeatButton: byId("stop-sim-heartbeat"),
   runtimeLog: byId("runtime-log")
 };
 
@@ -307,7 +282,7 @@ function setSessionAndProtocolFocus(zoneLabel) {
 
 function initializeBridge() {
   window.HydraVBridge = {
-    version: "0.2.0",
+    version: "0.3.0",
 
     publishBiometricFrame,
     publishRPeak(input = {}) {
@@ -348,6 +323,22 @@ function initializeBridge() {
 
     stopAuraScan() {
       auraScanEngine.stopScan();
+    },
+
+    startFascialThermalScan(options = {}) {
+      thermalEngine.startScan(Number(options.durationSec) || DEFAULTS.thermal.scanDurationSec);
+    },
+
+    stopFascialThermalScan() {
+      thermalEngine.stopScan();
+    },
+
+    clearThermalOverlay() {
+      thermalEngine.clearOverlay();
+    },
+
+    getLatestThermalMapping() {
+      return thermalEngine.getLatestResult();
     },
 
     setHandshakeTarget(target = {}) {
@@ -442,6 +433,7 @@ function initializeBridge() {
         protocolContext: state.protocolContext,
         latestBiometrics: state.latestBiometrics,
         aura: state.aura,
+        thermal: state.thermal,
         handshake: state.handshake,
         plasticity: state.plasticity,
         cardiac: state.cardiacEngine,
@@ -455,6 +447,7 @@ function initializeBridge() {
 
 function bindUi() {
   elements.auraScanDurationInput.value = String(DEFAULTS.auraScan.scanDurationSec);
+  elements.thermalDurationInput.value = String(DEFAULTS.thermal.scanDurationSec);
   elements.handshakeZoneSelect.value = DEFAULTS.neuralHandshake.defaultZone;
   elements.handshakeInjuredSideSelect.value = DEFAULTS.neuralHandshake.defaultInjuredSide;
   elements.handshakeDurationInput.value = String(DEFAULTS.neuralHandshake.recordDurationSec);
@@ -483,6 +476,8 @@ function bindUi() {
 
   elements.auraStopCameraButton.addEventListener("click", () => {
     auraScanEngine.stopCamera();
+    thermalEngine.stopScan();
+    thermalEngine.clearOverlay();
     neuralHandshakeEngine.stop();
     log("Aura camera stopped.");
   });
@@ -500,6 +495,26 @@ function bindUi() {
   elements.auraStopScanButton.addEventListener("click", () => {
     auraScanEngine.stopScan();
     log("Aura scan stopped.");
+  });
+
+  elements.thermalStartButton.addEventListener("click", () => {
+    try {
+      const duration = Number(elements.thermalDurationInput.value);
+      thermalEngine.startScan(duration);
+      log(`Fascial thermal scan started for ${duration || DEFAULTS.thermal.scanDurationSec}s.`);
+    } catch (error) {
+      log(`Thermal scan failed to start: ${error.message}`, "warn");
+    }
+  });
+
+  elements.thermalStopButton.addEventListener("click", () => {
+    thermalEngine.stopScan();
+    log("Thermal scan stopped.");
+  });
+
+  elements.thermalClearOverlayButton.addEventListener("click", () => {
+    thermalEngine.clearOverlay();
+    log("Thermal AR overlay cleared.");
   });
 
   const syncHandshakeTargetFromUi = () => {
@@ -709,7 +724,7 @@ function bindUi() {
         sessionContext: state.sessionContext,
         protocolContext: state.protocolContext,
         biometrics: state.latestBiometrics,
-        beatHz: state.neuro.beatHz || 6,
+        beatHz: Number.isFinite(state.neuro.beatHz) ? state.neuro.beatHz : null,
         plasticityScore: state.plasticity?.score0To10
       }),
       { type: "theta-test" }
@@ -723,33 +738,11 @@ function bindUi() {
         sessionContext: state.sessionContext,
         protocolContext: state.protocolContext,
         biometrics: state.latestBiometrics,
-        beatHz: state.neuro.beatHz || 10,
+        beatHz: Number.isFinite(state.neuro.beatHz) ? state.neuro.beatHz : null,
         plasticityScore: state.plasticity?.score0To10
       }),
       { type: "post-test" }
     );
-  });
-
-  elements.emitSampleFrameButton.addEventListener("click", () => {
-    publishBiometricFrame({
-      timestampMs: performance.now(),
-      rPeakDetected: true,
-      rrIntervalMs: 845,
-      heartRateBpm: 71,
-      hrvRmssdMs: 38,
-      microsaccadeHz: 0.74
-    });
-    log("Published sample biometric frame.");
-  });
-
-  elements.startSimHeartbeatButton.addEventListener("click", () => {
-    simulator.start();
-    log("Heartbeat simulator running.");
-  });
-
-  elements.stopSimHeartbeatButton.addEventListener("click", () => {
-    simulator.stop();
-    log("Heartbeat simulator stopped.");
   });
 }
 
@@ -765,6 +758,18 @@ function bindEvents() {
       ? "warn"
       : (status.includes("scan") || status.includes("running") ? "live" : "idle");
     setPill(elements.auraStatusPill, statusLabel, pillType);
+
+    if (status === "scanning") {
+      elements.metricAuraProgress.textContent = "0%";
+      elements.metricAuraHr.textContent = "-- bpm";
+      elements.metricAuraHrv.textContent = "-- ms";
+      elements.metricAuraSymmetry.textContent = "-- %";
+      elements.metricAuraMicro.textContent = "-- Hz";
+      elements.metricAuraBreath.textContent = "-- /min";
+      elements.metricAuraReadiness.textContent = "-- / 10";
+      elements.metricAuraAlgorithm.textContent = "--";
+      elements.metricAuraSource.textContent = "--";
+    }
   });
 
   eventBus.on(EVENTS.AURA_SCAN_FRAME, (event) => {
@@ -773,38 +778,35 @@ function bindEvents() {
     state.aura.progress = d.progress ?? 0;
     elements.metricAuraProgress.textContent = `${round((d.progress ?? 0) * 100, 1)}%`;
 
-    if (Number.isFinite(d.heartRateBpm)) {
-      elements.metricAuraHr.textContent = `${round(d.heartRateBpm, 1)} bpm`;
-    }
+    elements.metricAuraHr.textContent = Number.isFinite(d.heartRateBpm)
+      ? `${round(d.heartRateBpm, 1)} bpm`
+      : "-- bpm";
+    elements.metricAuraHrv.textContent = Number.isFinite(d.hrvRmssdMs)
+      ? `${round(d.hrvRmssdMs, 1)} ms`
+      : "-- ms";
+    elements.metricAuraSymmetry.textContent = Number.isFinite(d.symmetryDeltaPct)
+      ? `${round(d.symmetryDeltaPct, 2)} %`
+      : "-- %";
+    elements.metricAuraMicro.textContent = Number.isFinite(d.microsaccadeHz)
+      ? `${round(d.microsaccadeHz, 3)} Hz`
+      : "-- Hz";
+    elements.metricAuraBreath.textContent = Number.isFinite(d.breathRatePerMin)
+      ? `${round(d.breathRatePerMin, 1)} /min`
+      : "-- /min";
+    elements.metricAuraReadiness.textContent = Number.isFinite(d.readinessScore)
+      ? `${round(d.readinessScore, 2)} / 10`
+      : "-- / 10";
 
-    if (Number.isFinite(d.hrvRmssdMs)) {
-      elements.metricAuraHrv.textContent = `${round(d.hrvRmssdMs, 1)} ms`;
-    }
+    state.aura.algorithm = (typeof d.algorithm === "string" && d.algorithm.trim())
+      ? d.algorithm
+      : "--";
+    elements.metricAuraAlgorithm.textContent = state.aura.algorithm !== "--"
+      ? state.aura.algorithm.toUpperCase()
+      : "--";
 
-    if (Number.isFinite(d.symmetryDeltaPct)) {
-      elements.metricAuraSymmetry.textContent = `${round(d.symmetryDeltaPct, 2)} %`;
-    }
-
-    if (Number.isFinite(d.microsaccadeHz)) {
-      elements.metricAuraMicro.textContent = `${round(d.microsaccadeHz, 3)} Hz`;
-    }
-
-    if (Number.isFinite(d.breathRatePerMin)) {
-      elements.metricAuraBreath.textContent = `${round(d.breathRatePerMin, 1)} /min`;
-    }
-
-    if (Number.isFinite(d.readinessScore)) {
-      elements.metricAuraReadiness.textContent = `${round(d.readinessScore, 2)} / 10`;
-    }
-
-    if (d.algorithm) {
-      state.aura.algorithm = d.algorithm;
-      elements.metricAuraAlgorithm.textContent = d.algorithm.toUpperCase();
-    }
-
-    if (typeof d.vitalsSource === "string" && d.vitalsSource) {
-      elements.metricAuraSource.textContent = d.vitalsSource;
-    }
+    elements.metricAuraSource.textContent = (typeof d.vitalsSource === "string" && d.vitalsSource)
+      ? d.vitalsSource
+      : "--";
   });
 
   eventBus.on(EVENTS.AURA_SCAN_COMPLETE, (event) => {
@@ -829,7 +831,64 @@ function bindEvents() {
       elements.auraColdZoneInput.value = "No strong asymmetry zone found";
     }
 
-    log(`Aura scan complete. Readiness ${round(d.readinessScore ?? 0, 2)}/10.`);
+    const readinessText = Number.isFinite(d.readinessScore) ? `${round(d.readinessScore, 2)}/10` : "unavailable";
+    log(`Aura scan complete. Readiness ${readinessText}.`);
+  });
+
+  eventBus.on(EVENTS.THERMAL_SCAN_STATUS, (event) => {
+    const status = event.detail.status || "idle";
+    state.thermal.status = status;
+    state.thermal.frameCount = Number(event.detail.frameCount || state.thermal.frameCount || 0);
+    elements.metricThermalStatus.textContent = humanize(status);
+    const pillType = status.includes("failed")
+      ? "warn"
+      : (status.includes("scan") || status.includes("analy") ? "live" : "idle");
+    setPill(elements.thermalStatusPill, humanize(status), pillType);
+  });
+
+  eventBus.on(EVENTS.THERMAL_SCAN_FRAME, (event) => {
+    const progress = clamp(event.detail.progress ?? 0, 0, 1);
+    state.thermal.progress = progress;
+    state.thermal.frameCount = Number(event.detail.frameCount || state.thermal.frameCount || 0);
+    elements.metricThermalProgress.textContent = `${round(progress * 100, 1)}% (${state.thermal.frameCount} frames)`;
+  });
+
+  eventBus.on(EVENTS.THERMAL_SCAN_COMPLETE, (event) => {
+    const d = event.detail || {};
+    const topZone = d.zoneScores?.[0];
+    const sun = d.recommendedPads?.sun;
+    const moon = d.recommendedPads?.moon;
+
+    elements.metricThermalProgress.textContent = "100%";
+    elements.metricThermalTopZone.textContent = topZone ? `${topZone.side} ${topZone.zone}` : "--";
+    elements.metricThermalSunPad.textContent = formatPadLabel(sun);
+    elements.metricThermalMoonPad.textContent = formatPadLabel(moon);
+
+    const framesUsed = Number(d.quality?.frames_used || 0);
+    const poseCoverage = Number.isFinite(d.quality?.pose_coverage)
+      ? `${round(d.quality.pose_coverage * 100, 1)}%`
+      : "--";
+    elements.metricThermalQuality.textContent = `${framesUsed} frames | pose ${poseCoverage}`;
+
+    if (sun?.zone && sun?.side) {
+      const zoneLabel = `${sun.side} ${sun.zone}`;
+      state.thermal.topZone = zoneLabel;
+      state.thermal.sunPad = zoneLabel;
+      state.handshake.zoneSource = "Thermal Map";
+      elements.metricHandshakeZoneSource.textContent = state.handshake.zoneSource;
+      elements.handshakeZoneSelect.value = sun.zone;
+      elements.handshakeInjuredSideSelect.value = sun.side;
+      neuralHandshakeEngine.setTarget({ zone: sun.zone, injuredSide: sun.side });
+      setSessionAndProtocolFocus(zoneLabel);
+    }
+
+    if (moon?.zone && moon?.side) {
+      state.thermal.moonPad = `${moon.side} ${moon.zone}`;
+    }
+
+    log(
+      `Thermal mapping complete. Sun: ${formatPadLabel(sun)} | Moon: ${formatPadLabel(moon)} | Algo: ${d.algorithm || "thermal"}`
+    );
   });
 
   eventBus.on(EVENTS.NEURAL_HANDSHAKE_STATUS, (event) => {
@@ -857,17 +916,15 @@ function bindEvents() {
     cardiacEngine.ingestFrame(frame);
     neuroEngine.updateBiometrics(frame);
 
-    if (Number.isFinite(frame.heartRateBpm)) {
-      elements.metricHeartRate.textContent = `${round(frame.heartRateBpm, 1)} bpm`;
-    }
-
-    if (Number.isFinite(frame.rrIntervalMs)) {
-      elements.metricRR.textContent = `${round(frame.rrIntervalMs, 1)} ms`;
-    }
-
-    if (Number.isFinite(frame.microsaccadeHz)) {
-      elements.metricMicro.textContent = `${round(frame.microsaccadeHz, 2)} Hz`;
-    }
+    elements.metricHeartRate.textContent = Number.isFinite(frame.heartRateBpm)
+      ? `${round(frame.heartRateBpm, 1)} bpm`
+      : "-- bpm";
+    elements.metricRR.textContent = Number.isFinite(frame.rrIntervalMs)
+      ? `${round(frame.rrIntervalMs, 1)} ms`
+      : "-- ms";
+    elements.metricMicro.textContent = Number.isFinite(frame.microsaccadeHz)
+      ? `${round(frame.microsaccadeHz, 2)} Hz`
+      : "-- Hz";
   });
 
   eventBus.on(EVENTS.R_PEAK, (event) => {
@@ -943,7 +1000,9 @@ function bindEvents() {
 
   eventBus.on(EVENTS.PLASTICITY_SCORE_UPDATED, (event) => {
     state.plasticity = event.detail;
-    elements.metricPlasticity.textContent = `${round(event.detail.score0To10, 2)} / 10`;
+    elements.metricPlasticity.textContent = Number.isFinite(event.detail.score0To10)
+      ? `${round(event.detail.score0To10, 2)} / 10`
+      : "-- / 10";
   });
 
   eventBus.on(EVENTS.NEURO_PHASE_CHANGED, (event) => {
@@ -967,7 +1026,9 @@ function bindEvents() {
       ...event.detail
     };
 
-    elements.metricBeatHz.textContent = `${round(event.detail.beatHz, 2)} Hz`;
+    elements.metricBeatHz.textContent = Number.isFinite(event.detail.beatHz)
+      ? `${round(event.detail.beatHz, 2)} Hz`
+      : "-- Hz";
     elements.metricArousal.textContent = Number.isFinite(event.detail.arousalIndex)
       ? String(round(event.detail.arousalIndex, 3))
       : "--";
@@ -984,7 +1045,7 @@ function bindEvents() {
         sessionContext: state.sessionContext,
         protocolContext: state.protocolContext,
         biometrics: state.latestBiometrics,
-        beatHz: state.neuro.beatHz || 10,
+        beatHz: Number.isFinite(state.neuro.beatHz) ? state.neuro.beatHz : null,
         plasticityScore: state.plasticity?.score0To10
       }),
       { type: "post-session" }
@@ -1017,7 +1078,7 @@ function scheduleThetaNarration() {
         sessionContext: state.sessionContext,
         protocolContext: state.protocolContext,
         biometrics: state.latestBiometrics,
-        beatHz: state.neuro.beatHz || 6,
+        beatHz: Number.isFinite(state.neuro.beatHz) ? state.neuro.beatHz : null,
         plasticityScore: state.plasticity?.score0To10
       }),
       { type: "theta-loop", phase: state.neuro.phase }
@@ -1035,6 +1096,14 @@ function pickTopZone(flaggedZones) {
 
   const sorted = [...flaggedZones].sort((a, b) => (b.score || 0) - (a.score || 0));
   return sorted[0] || null;
+}
+
+function formatPadLabel(pad) {
+  if (!pad || !pad.zone || !pad.side) {
+    return "--";
+  }
+  const confidence = Number.isFinite(pad.confidence) ? ` (${round(pad.confidence * 100, 1)}%)` : "";
+  return `${pad.side} ${pad.zone}${confidence}`;
 }
 
 function buildHydrawavStartPayload(mac) {
@@ -1099,6 +1168,7 @@ async function bootstrap() {
   });
 
   setPill(elements.auraStatusPill, "Idle", "idle");
+  setPill(elements.thermalStatusPill, "Idle", "idle");
   setPill(elements.handshakeStatusPill, "Idle", "idle");
   setPill(elements.deviceApiStatus, "Logged Out", "idle");
   setPill(elements.voiceStatus, "Disabled", "idle");
@@ -1120,7 +1190,7 @@ async function bootstrap() {
     }
   }
 
-  log("HYDRA-V Feature 1-4 runtime initialized.");
+  log("HYDRA-V Feature 1-5 runtime initialized.");
 }
 
 bootstrap();

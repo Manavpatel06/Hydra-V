@@ -64,6 +64,12 @@
       post: 45
     }
   },
+  thermal: {
+    scanDurationSec: 8,
+    sampleFps: 10,
+    maxFrames: 96,
+    analyzeProxyUrl: "/api/thermal/analyze"
+  },
   voice: {
     enabled: false,
     proxyUrl: "/api/voice/elevenlabs/tts",

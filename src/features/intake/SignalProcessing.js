@@ -152,18 +152,18 @@ export function estimateSkinMode(rgb) {
 }
 
 export function computeReadinessScore({ hrvRmssdMs, symmetryDeltaPct, microsaccadeHz }) {
-  const hrvNorm = clamp((Number(hrvRmssdMs) - 15) / (80 - 15), 0, 1);
-  const symmetryNorm = 1 - clamp(Number(symmetryDeltaPct) / 30, 0, 1);
+  if (!Number.isFinite(hrvRmssdMs) || !Number.isFinite(symmetryDeltaPct) || !Number.isFinite(microsaccadeHz)) {
+    return null;
+  }
 
-  let microNorm = 0.4;
-  if (Number.isFinite(microsaccadeHz)) {
-    if (microsaccadeHz <= 0.5) {
-      microNorm = 0.1;
-    } else if (microsaccadeHz >= 1.8) {
-      microNorm = 1;
-    } else {
-      microNorm = clamp((microsaccadeHz - 0.5) / (1.8 - 0.5), 0, 1);
-    }
+  const hrvNorm = clamp((hrvRmssdMs - 15) / (80 - 15), 0, 1);
+  const symmetryNorm = 1 - clamp(symmetryDeltaPct / 30, 0, 1);
+
+  let microNorm = 0.1;
+  if (microsaccadeHz >= 1.8) {
+    microNorm = 1;
+  } else if (microsaccadeHz > 0.5) {
+    microNorm = clamp((microsaccadeHz - 0.5) / (1.8 - 0.5), 0, 1);
   }
 
   const score = (hrvNorm * 0.45 + symmetryNorm * 0.35 + microNorm * 0.2) * 10;

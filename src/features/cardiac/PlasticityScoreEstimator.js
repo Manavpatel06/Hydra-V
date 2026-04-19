@@ -6,10 +6,10 @@ export class PlasticityScoreEstimator {
     this.rrIntervalsMs = [];
     this.latest = {
       rrSamples: 0,
-      rmssdMs: 0,
-      sdnnMs: 0,
-      adaptability: 0,
-      score0To10: 0
+      rmssdMs: null,
+      sdnnMs: null,
+      adaptability: null,
+      score0To10: null
     };
   }
 
@@ -22,6 +22,17 @@ export class PlasticityScoreEstimator {
     }
 
     const rrSamples = this.rrIntervalsMs.length;
+    if (rrSamples < 4) {
+      this.latest = {
+        rrSamples,
+        rmssdMs: null,
+        sdnnMs: null,
+        adaptability: null,
+        score0To10: null
+      };
+      return this.latest;
+    }
+
     const rrDiffs = [];
 
     for (let i = 1; i < rrSamples; i += 1) {
@@ -30,25 +41,33 @@ export class PlasticityScoreEstimator {
 
     const rmssdFromRR = rrDiffs.length
       ? Math.sqrt(mean(rrDiffs.map((value) => value * value)))
-      : 0;
+      : null;
 
     const rmssdInput = Number.isFinite(sample.hrvRmssdMs) ? sample.hrvRmssdMs : null;
-    const rmssdMs = rmssdInput === null
-      ? rmssdFromRR
-      : (rmssdFromRR > 0 ? mean([rmssdFromRR, rmssdInput]) : rmssdInput);
+    let rmssdMs = null;
+    if (rmssdFromRR !== null && rmssdInput !== null) {
+      rmssdMs = mean([rmssdFromRR, rmssdInput]);
+    } else if (rmssdFromRR !== null) {
+      rmssdMs = rmssdFromRR;
+    } else if (rmssdInput !== null) {
+      rmssdMs = rmssdInput;
+    }
 
-    const sdnnMs = stdDev(this.rrIntervalsMs);
+    const sdnnMs = rrSamples >= 2 ? stdDev(this.rrIntervalsMs) : null;
     const adaptability = this.computeAdaptability(rrDiffs);
 
-    const rmssdNorm = clamp((rmssdMs - 12) / (85 - 12), 0, 1);
-    const sdnnNorm = clamp((sdnnMs - 15) / (95 - 15), 0, 1);
-    const score0To10 = round((rmssdNorm * 0.45 + sdnnNorm * 0.35 + adaptability * 0.2) * 10, 2);
+    let score0To10 = null;
+    if (Number.isFinite(rmssdMs) && Number.isFinite(sdnnMs) && Number.isFinite(adaptability)) {
+      const rmssdNorm = clamp((rmssdMs - 12) / (85 - 12), 0, 1);
+      const sdnnNorm = clamp((sdnnMs - 15) / (95 - 15), 0, 1);
+      score0To10 = round((rmssdNorm * 0.45 + sdnnNorm * 0.35 + adaptability * 0.2) * 10, 2);
+    }
 
     this.latest = {
       rrSamples,
-      rmssdMs: round(rmssdMs, 2),
-      sdnnMs: round(sdnnMs, 2),
-      adaptability: round(adaptability, 3),
+      rmssdMs: Number.isFinite(rmssdMs) ? round(rmssdMs, 2) : null,
+      sdnnMs: Number.isFinite(sdnnMs) ? round(sdnnMs, 2) : null,
+      adaptability: Number.isFinite(adaptability) ? round(adaptability, 3) : null,
       score0To10
     };
 
@@ -61,7 +80,7 @@ export class PlasticityScoreEstimator {
 
   computeAdaptability(rrDiffs) {
     if (rrDiffs.length < 3) {
-      return 0.5;
+      return null;
     }
 
     const smoothnessSamples = [];

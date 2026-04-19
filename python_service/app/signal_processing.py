@@ -101,8 +101,8 @@ def compute_metrics(
         symmetry_delta = _to_float(local_metrics.get("symmetry_delta_pct"))
 
     readiness_score = _compute_readiness_score(
-        hrv_rmssd_ms if hrv_rmssd_ms is not None else (rr_interval_ms / 12 if rr_interval_ms else 20),
-        symmetry_delta if symmetry_delta is not None else 8,
+        hrv_rmssd_ms,
+        symmetry_delta,
         microsaccade_hz
     )
 
@@ -119,7 +119,7 @@ def compute_metrics(
         "symmetry_delta_pct": _round(symmetry_delta, 2),
         "flagged_zones": state.flagged_zones,
         "readiness_score": _round(readiness_score, 2),
-        "cns_fatigue": bool(microsaccade_hz is not None and microsaccade_hz < 0.5),
+        "cns_fatigue": (microsaccade_hz < 0.5) if microsaccade_hz is not None else None,
         "breath_rate_per_min": None,
         "vitals_source": source
     }
@@ -221,13 +221,18 @@ def _estimate_microsaccade_hz(state: SessionState) -> float | None:
     return float(bursts / span_sec)
 
 
-def _compute_readiness_score(hrv_rmssd_ms: float, symmetry_delta_pct: float, microsaccade_hz: float | None) -> float:
+def _compute_readiness_score(
+    hrv_rmssd_ms: float | None,
+    symmetry_delta_pct: float | None,
+    microsaccade_hz: float | None
+) -> float | None:
+    if hrv_rmssd_ms is None or symmetry_delta_pct is None or microsaccade_hz is None:
+        return None
+
     hrv_norm = np.clip((hrv_rmssd_ms - 15) / (80 - 15), 0, 1)
     symmetry_norm = 1 - np.clip(symmetry_delta_pct / 30, 0, 1)
 
-    if microsaccade_hz is None:
-        micro_norm = 0.4
-    elif microsaccade_hz <= 0.5:
+    if microsaccade_hz <= 0.5:
         micro_norm = 0.1
     elif microsaccade_hz >= 1.8:
         micro_norm = 1.0
@@ -252,8 +257,10 @@ def _fuse_heart_rate(local_hr: float | None, ruview: dict[str, Any] | None) -> t
         return local_hr, "python"
 
     ru_hr = _to_float(ruview.get("heart_rate_bpm"))
+    source_name = str(ruview.get("source") or "ruview")
+
     if local_hr is None:
-        return ru_hr, "ruview"
+        return ru_hr, source_name
     if ru_hr is None:
         return local_hr, "python"
 
@@ -264,9 +271,9 @@ def _fuse_heart_rate(local_hr: float | None, ruview: dict[str, Any] | None) -> t
 
     if abs(local_hr - ru_hr) <= 8:
         fused = (local_hr * py_conf + ru_hr * ru_conf) / (py_conf + ru_conf)
-        return fused, "python+ruview"
+        return fused, f"python+{source_name}"
 
-    return (local_hr, "python") if py_conf >= ru_conf else (ru_hr, "ruview")
+    return (local_hr, "python") if py_conf >= ru_conf else (ru_hr, source_name)
 
 
 def _to_float(value: Any) -> float | None:
