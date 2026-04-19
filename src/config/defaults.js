@@ -52,7 +52,7 @@
   },
   neuro: {
     carrierHz: 220,
-    volume: 0.34,
+    volume: 0.42,
     phaseDurationSec: {
       pre: 45,
       during: 120,

@@ -13,6 +13,12 @@
   --warn: #ff8d74;
   --mono: "JetBrains Mono", "IBM Plex Mono", "Space Mono", monospace;
   --sans: "Sora", "Space Grotesk", sans-serif;
+  --landing-sans: "Inter", "Helvetica Neue", Arial, sans-serif;
+  --landing-serif: Georgia, "Times New Roman", serif;
+  --landing-tan: hsl(30 38% 59%);
+  --landing-tan-light: hsl(32 45% 70%);
+  --landing-tan-deep: hsl(30 26% 31%);
+  --landing-shadow: 0 0 40px rgba(193, 154, 107, 0.24);
   --r: 10px;
 }
 
@@ -101,6 +107,7 @@ code {
     radial-gradient(80% 90% at 0% 0%, rgba(22, 148, 212, 0.14), transparent 62%),
     linear-gradient(180deg, rgba(5, 20, 38, 0.96), rgba(4, 14, 28, 0.96));
   box-shadow: 0 20px 54px rgba(0, 6, 15, 0.32);
+  font-family: var(--landing-sans);
 }
 
 .patient-entry-copy {
@@ -110,25 +117,28 @@ code {
 }
 
 .patient-entry-copy h1 {
+  font-family: var(--landing-serif);
   font-size: clamp(2.1rem, 4vw, 3.5rem);
-  line-height: 0.96;
-  letter-spacing: -0.04em;
+  font-weight: 700;
+  line-height: 0.98;
+  letter-spacing: -0.02em;
   max-width: 10ch;
 }
 
 .patient-entry-kicker {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  letter-spacing: 0.26em;
+  font-family: var(--landing-sans);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--cyan);
+  color: var(--landing-tan-light);
 }
 
 .patient-entry-text {
   max-width: 58ch;
-  font-size: 0.98rem;
-  line-height: 1.65;
-  color: #99c2da;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: #c9d3dc;
 }
 
 .patient-entry-signals {
@@ -158,18 +168,19 @@ code {
 }
 
 .patient-entry-signals strong {
-  font-family: var(--mono);
-  font-size: 0.76rem;
-  letter-spacing: 0.12em;
+  font-family: var(--landing-sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #d8f5ff;
 }
 
 .patient-entry-signals p {
-  font-family: var(--mono);
-  font-size: 0.64rem;
-  line-height: 1.5;
-  color: #89b2c8;
+  font-family: var(--landing-sans);
+  font-size: 0.74rem;
+  line-height: 1.55;
+  color: #9fb3c2;
 }
 
 .patient-entry-card {
@@ -179,10 +190,49 @@ code {
   align-content: start;
 }
 
+.patient-entry-card .panel-head h2,
+.patient-entry-card .analysis-box h4 {
+  font-family: var(--landing-serif);
+  letter-spacing: -0.01em;
+}
+
+.patient-entry-card .panel-head p,
+.patient-entry-card .analysis-box p,
+.patient-entry-card .text-list {
+  font-family: var(--landing-sans);
+}
+
+.patient-entry-screen .field span {
+  font-family: var(--landing-sans);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--landing-tan-light);
+}
+
 .patient-id-field input {
-  min-height: 48px;
-  font-size: 1rem;
-  letter-spacing: 0.14em;
+  min-height: 52px;
+  border-color: rgba(188, 152, 112, 0.54);
+  border-radius: 12px;
+  background: rgba(10, 22, 36, 0.92);
+  font-family: var(--landing-sans);
+  font-size: 0.98rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: #f4f6f8;
+}
+
+.patient-id-field input::placeholder {
+  color: rgba(231, 221, 209, 0.54);
+}
+
+.patient-entry-screen .field input:focus,
+.patient-entry-screen .field select:focus,
+.patient-entry-screen textarea:focus {
+  border-color: rgba(215, 181, 140, 0.92);
+  box-shadow:
+    0 0 0 2px rgba(193, 154, 107, 0.16),
+    0 0 24px rgba(193, 154, 107, 0.14);
 }
 
 .patient-lookup-box {
@@ -191,7 +241,35 @@ code {
 
 .patient-entry-actions button {
   width: 100%;
-  min-height: 46px;
+  min-height: 52px;
+  border: 1px solid rgba(222, 199, 171, 0.44);
+  border-radius: 12px;
+  background-image: linear-gradient(90deg, var(--landing-tan), var(--landing-tan-light));
+  color: #fff;
+  font-family: var(--landing-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  box-shadow: var(--landing-shadow);
+  transition:
+    transform 0.3s ease,
+    box-shadow 0.3s ease,
+    filter 0.3s ease;
+}
+
+.patient-entry-actions button:hover {
+  transform: translateY(-1px) scale(1.03);
+  filter: saturate(1.04) brightness(1.03);
+  box-shadow: 0 0 48px rgba(193, 154, 107, 0.3);
+}
+
+.patient-entry-actions button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.14),
+    0 0 0 5px rgba(193, 154, 107, 0.24),
+    0 0 42px rgba(193, 154, 107, 0.28);
 }
 
 .hero {

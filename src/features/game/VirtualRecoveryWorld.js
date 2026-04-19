@@ -126,9 +126,83 @@ function zoneTint(zone = "shoulder") {
   return "#ffd08a";
 }
 
+function safeAngle(start, end) {
+  if (!start || !end || !Number.isFinite(Number(start.x)) || !Number.isFinite(Number(start.y)) || !Number.isFinite(Number(end.x)) || !Number.isFinite(Number(end.y))) {
+    return null;
+  }
+  return Math.atan2(Number(end.y) - Number(start.y), Number(end.x) - Number(start.x));
+}
+
+function angleDeg(a, b, c) {
+  if (!a || !b || !c) {
+    return null;
+  }
+
+  const abx = Number(a.x) - Number(b.x);
+  const aby = Number(a.y) - Number(b.y);
+  const cbx = Number(c.x) - Number(b.x);
+  const cby = Number(c.y) - Number(b.y);
+  const dot = abx * cbx + aby * cby;
+  const mag1 = Math.sqrt((abx * abx) + (aby * aby)) || 1;
+  const mag2 = Math.sqrt((cbx * cbx) + (cby * cby)) || 1;
+  const cosine = clamp(dot / (mag1 * mag2), -1, 1);
+  return Math.acos(cosine) * (180 / Math.PI);
+}
+
+function pointQuality(point) {
+  if (!point) {
+    return 0;
+  }
+  const visibility = Number.isFinite(Number(point.visibility)) ? Number(point.visibility) : 0.88;
+  const presence = Number.isFinite(Number(point.presence)) ? Number(point.presence) : 0.88;
+  return clamp(Math.min(visibility, presence), 0, 1);
+}
+
+function hasPosePoint(point) {
+  return !!point
+    && Number.isFinite(Number(point.x))
+    && Number.isFinite(Number(point.y))
+    && pointQuality(point) > 0.24;
+}
+
+function midpoint(a, b) {
+  if (!a || !b) {
+    return null;
+  }
+  return {
+    x: (Number(a.x) + Number(b.x)) * 0.5,
+    y: (Number(a.y) + Number(b.y)) * 0.5
+  };
+}
+
+function createLivePoseState() {
+  return {
+    rootX: 0,
+    rootY: 0.34,
+    spinePitch: 0,
+    chestYaw: 0,
+    leftArmX: 0.08,
+    rightArmX: 0.08,
+    leftArmZ: 0,
+    rightArmZ: 0,
+    leftElbowX: -0.06,
+    rightElbowX: -0.06,
+    leftHipX: 0,
+    rightHipX: 0,
+    leftKneeX: 0,
+    rightKneeX: 0,
+    confidence: 0
+  };
+}
+
+function blendPoseValue(fallback, live, amount) {
+  return fallback + ((live - fallback) * clamp(amount, 0, 1));
+}
+
 export class VirtualRecoveryWorld {
-  constructor({ canvasEl }) {
+  constructor({ canvasEl, getPoseLandmarks = null }) {
     this.canvas = canvasEl;
+    this.getPoseLandmarks = getPoseLandmarks;
 
     this.renderer = null;
     this.scene = null;
@@ -189,6 +263,7 @@ export class VirtualRecoveryWorld {
     this.lastRepCount = 0;
     this.lastActionsCompleted = 0;
     this.currentRepTarget = 0;
+    this.currentRepsDone = 0;
     this.currentActionId = null;
     this.currentActionLabel = null;
     this.zone = "shoulder";
@@ -201,6 +276,9 @@ export class VirtualRecoveryWorld {
     this.repBurst = 0;
     this.actionSwitchPulse = 0;
     this.storyChapter = STORY_CHAPTERS[0];
+    this.livePoseState = createLivePoseState();
+    this.livePoseConfidence = 0;
+    this.liveStoryLine = STORY_CHAPTERS[0].line;
 
     this.initialized = false;
   }
@@ -254,6 +332,7 @@ export class VirtualRecoveryWorld {
     const repsDone = Number(payload.repsDone || 0);
     const actionsCompleted = Number(payload.actionsCompleted || 0);
     this.currentRepTarget = Number(payload.repsTarget || this.currentRepTarget || 0);
+    this.currentRepsDone = repsDone;
 
     if (actionsCompleted > this.lastActionsCompleted) {
       this.repDrivenPlacements += actionsCompleted - this.lastActionsCompleted;
@@ -292,6 +371,8 @@ export class VirtualRecoveryWorld {
     const target = clamp(Math.max(scoreDrivenTarget, this.repDrivenPlacements), 0, this.totalBlocks);
     this.setPlacedCount(target, this.currentActionId);
     this.storyChapter = this.resolveStoryChapter(this.placedCount);
+    this.resolveLivePoseState();
+    this.liveStoryLine = this.buildLiveStoryLine();
     this.updateLighting();
   }
 
@@ -305,6 +386,9 @@ export class VirtualRecoveryWorld {
         id: this.storyChapter.id,
         title: this.storyChapter.title,
         line: this.storyChapter.line
+      },
+      liveStory: {
+        line: this.liveStoryLine
       },
       activeActionId: this.currentActionId
     };
@@ -704,6 +788,7 @@ export class VirtualRecoveryWorld {
     this.lastRepCount = 0;
     this.lastActionsCompleted = 0;
     this.currentRepTarget = 0;
+    this.currentRepsDone = 0;
     this.currentActionId = null;
     this.currentActionLabel = null;
     this.actionEnergy = 0;
@@ -716,6 +801,9 @@ export class VirtualRecoveryWorld {
     this.targetActionEnergy = 0;
     this.repFill = 0;
     this.targetRepFill = 0;
+    this.livePoseState = createLivePoseState();
+    this.livePoseConfidence = 0;
+    this.liveStoryLine = STORY_CHAPTERS[0].line;
 
     this.sectionPlaced = {
       foundation: 0,
@@ -846,6 +934,206 @@ export class VirtualRecoveryWorld {
     }
   }
 
+  applyLiveArmPose(nextPose, side, shoulder, elbow, wrist, shoulderSpan) {
+    if (!hasPosePoint(shoulder) || !hasPosePoint(elbow)) {
+      return;
+    }
+
+    const hand = hasPosePoint(wrist) ? wrist : elbow;
+    const sideSign = side === "right" ? 1 : -1;
+    const armRise = clamp((Number(shoulder.y) - Number(hand.y)) / 0.28, -0.2, 1.35);
+    const outward = clamp((Number(hand.x) - Number(shoulder.x)) / Math.max(shoulderSpan, 0.1), -1.2, 1.2);
+    const elbowAngle = hasPosePoint(wrist) ? angleDeg(shoulder, elbow, wrist) : null;
+    const elbowBend = Number.isFinite(elbowAngle) ? clamp((188 - elbowAngle) / 110, 0, 1.15) : 0.14;
+
+    const shoulderX = clamp(-(0.05 + armRise * 1.24), -1.72, 0.22);
+    const shoulderZ = clamp(sideSign * outward * 0.72, -0.96, 0.96);
+    const elbowX = clamp(-(0.08 + elbowBend * 1.08), -1.42, 0.12);
+
+    if (side === "left") {
+      nextPose.leftArmX = shoulderX;
+      nextPose.leftArmZ = shoulderZ;
+      nextPose.leftElbowX = elbowX;
+      return;
+    }
+
+    nextPose.rightArmX = shoulderX;
+    nextPose.rightArmZ = shoulderZ;
+    nextPose.rightElbowX = elbowX;
+  }
+
+  resolveLivePoseState() {
+    const nextPose = createLivePoseState();
+    const landmarks = this.getPoseLandmarks?.();
+    if (!Array.isArray(landmarks) || landmarks.length < 29) {
+      this.livePoseConfidence = 0;
+      this.livePoseState = nextPose;
+      return nextPose;
+    }
+
+    const leftShoulder = landmarks[11];
+    const rightShoulder = landmarks[12];
+    const leftElbow = landmarks[13];
+    const rightElbow = landmarks[14];
+    const leftWrist = landmarks[15];
+    const rightWrist = landmarks[16];
+    const leftHip = landmarks[23];
+    const rightHip = landmarks[24];
+    const leftKnee = landmarks[25];
+    const rightKnee = landmarks[26];
+    const leftAnkle = landmarks[27];
+    const rightAnkle = landmarks[28];
+
+    const torsoPoints = [leftShoulder, rightShoulder, leftHip, rightHip].filter(hasPosePoint);
+    if (torsoPoints.length < 3) {
+      this.livePoseConfidence = 0;
+      this.livePoseState = nextPose;
+      return nextPose;
+    }
+
+    const poseConfidence = torsoPoints.reduce((sum, point) => sum + pointQuality(point), 0) / torsoPoints.length;
+    nextPose.confidence = poseConfidence;
+
+    const shoulderSpan = Math.max(Math.abs(Number(rightShoulder?.x) - Number(leftShoulder?.x)), 0.12);
+    this.applyLiveArmPose(nextPose, "left", leftShoulder, leftElbow, leftWrist, shoulderSpan);
+    this.applyLiveArmPose(nextPose, "right", rightShoulder, rightElbow, rightWrist, shoulderSpan);
+
+    const shoulderCenter = midpoint(leftShoulder, rightShoulder);
+    const hipCenter = midpoint(leftHip, rightHip);
+    const leftKneeAngle = hasPosePoint(leftHip) && hasPosePoint(leftKnee) && hasPosePoint(leftAnkle)
+      ? angleDeg(leftHip, leftKnee, leftAnkle)
+      : null;
+    const rightKneeAngle = hasPosePoint(rightHip) && hasPosePoint(rightKnee) && hasPosePoint(rightAnkle)
+      ? angleDeg(rightHip, rightKnee, rightAnkle)
+      : null;
+    const leftSquat = Number.isFinite(leftKneeAngle) ? clamp((172 - leftKneeAngle) / 62, 0, 1.15) : 0;
+    const rightSquat = Number.isFinite(rightKneeAngle) ? clamp((172 - rightKneeAngle) / 62, 0, 1.15) : 0;
+    const squatDepth = (leftSquat + rightSquat) * 0.5;
+
+    if (hasPosePoint(shoulderCenter) && hasPosePoint(hipCenter)) {
+      const shoulderOffset = clamp((Number(hipCenter.x) - Number(shoulderCenter.x)) * 1.8, -0.18, 0.18);
+      nextPose.chestYaw = shoulderOffset * 0.6;
+    }
+
+    const activeSide = this.side === "right" ? "right" : "left";
+    const activeShoulder = activeSide === "right" ? rightShoulder : leftShoulder;
+    const activeHip = activeSide === "right" ? rightHip : leftHip;
+    const activeKnee = activeSide === "right" ? rightKnee : leftKnee;
+    const activeAnkle = activeSide === "right" ? rightAnkle : leftAnkle;
+    const oppositeHip = activeSide === "right" ? leftHip : rightHip;
+    const oppositeKnee = activeSide === "right" ? leftKnee : rightKnee;
+    const oppositeAnkle = activeSide === "right" ? leftAnkle : rightAnkle;
+    const sideSign = activeSide === "right" ? 1 : -1;
+    const actionId = this.currentActionId || this.zone || "raise";
+
+    const setActiveLeg = (hipPitch, kneePitch) => {
+      if (activeSide === "right") {
+        nextPose.rightHipX = hipPitch;
+        nextPose.rightKneeX = kneePitch;
+      } else {
+        nextPose.leftHipX = hipPitch;
+        nextPose.leftKneeX = kneePitch;
+      }
+    };
+
+    const setOppositeLeg = (hipPitch, kneePitch) => {
+      if (activeSide === "right") {
+        nextPose.leftHipX = hipPitch;
+        nextPose.leftKneeX = kneePitch;
+      } else {
+        nextPose.rightHipX = hipPitch;
+        nextPose.rightKneeX = kneePitch;
+      }
+    };
+
+    if (actionId === "mini-squat") {
+      nextPose.rootY = 0.34 - (squatDepth * 0.24);
+      nextPose.spinePitch = -(squatDepth * 0.14);
+      nextPose.leftHipX = squatDepth * 0.84;
+      nextPose.rightHipX = squatDepth * 0.84;
+      nextPose.leftKneeX = -(squatDepth * 0.68);
+      nextPose.rightKneeX = -(squatDepth * 0.68);
+    } else if ((actionId === "march" || actionId === "step-lift") && hasPosePoint(activeHip) && hasPosePoint(activeKnee)) {
+      const lift = clamp((0.2 - (Number(activeKnee.y) - Number(activeHip.y))) / 0.18, 0, 1.08);
+      const activeKneeAngle = hasPosePoint(activeAnkle) ? angleDeg(activeHip, activeKnee, activeAnkle) : null;
+      const bend = Number.isFinite(activeKneeAngle) ? clamp((176 - activeKneeAngle) / 98, 0, 1) : lift * 0.5;
+      nextPose.rootY = 0.34 + (lift * 0.05);
+      nextPose.rootX = hasPosePoint(activeAnkle)
+        ? clamp((Number(activeAnkle.x) - Number(activeHip.x)) * 1.8, -0.16, 0.16)
+        : 0;
+      nextPose.chestYaw = sideSign * lift * 0.16;
+      setActiveLeg(lift * 1.02, -(0.12 + bend * 0.72));
+      setOppositeLeg(lift * 0.08, 0);
+    } else if (actionId === "side-step" && hasPosePoint(activeHip) && hasPosePoint(activeAnkle)) {
+      const lateral = clamp(((Number(activeAnkle.x) - Number(activeHip.x)) * sideSign) / 0.2, 0, 1.3);
+      nextPose.rootX = clamp((Number(activeAnkle.x) - Number(activeHip.x)) * 2.4, -0.52, 0.52);
+      nextPose.chestYaw = -sideSign * lateral * 0.2;
+      setActiveLeg(lateral * 0.24, -(lateral * 0.16));
+    } else if (actionId === "hinge" && hasPosePoint(activeShoulder) && hasPosePoint(activeHip)) {
+      const forward = clamp(Math.abs(Number(activeShoulder.x) - Number(activeHip.x)) / 0.18, 0, 1.05);
+      nextPose.rootY = 0.34 - (forward * 0.04);
+      nextPose.spinePitch = -(0.1 + forward * 0.56);
+      nextPose.leftHipX = Math.max(nextPose.leftHipX, forward * 0.22);
+      nextPose.rightHipX = Math.max(nextPose.rightHipX, forward * 0.22);
+      nextPose.leftKneeX = Math.min(nextPose.leftKneeX, -(forward * 0.12));
+      nextPose.rightKneeX = Math.min(nextPose.rightKneeX, -(forward * 0.12));
+    } else if (actionId === "extension" && hasPosePoint(activeKnee) && hasPosePoint(activeAnkle)) {
+      const extension = clamp((Math.abs(Number(activeAnkle.x) - Number(activeKnee.x)) - 0.015) / 0.16, 0, 1.2);
+      nextPose.rootY = 0.34 + (extension * 0.02);
+      setActiveLeg(extension * 0.34, -(0.1 + extension * 0.76));
+      setOppositeLeg(extension * 0.06, 0);
+    } else if ((actionId === "raise" || actionId === "cross" || actionId === "elbow-drive") && hasPosePoint(activeShoulder)) {
+      const activeHand = activeSide === "right" ? (hasPosePoint(rightWrist) ? rightWrist : rightElbow) : (hasPosePoint(leftWrist) ? leftWrist : leftElbow);
+      if (hasPosePoint(activeHand)) {
+        const reach = clamp((Number(activeShoulder.y) - Number(activeHand.y)) / 0.26, 0, 1.2);
+        nextPose.rootY = 0.34 + (reach * 0.02);
+        nextPose.chestYaw = clamp((Number(activeHand.x) - Number(activeShoulder.x)) * 1.4, -0.22, 0.22);
+      }
+    }
+
+    if (!this.currentActionId && squatDepth > 0.06) {
+      nextPose.rootY = 0.34 - (squatDepth * 0.12);
+      nextPose.leftHipX = Math.max(nextPose.leftHipX, squatDepth * 0.22);
+      nextPose.rightHipX = Math.max(nextPose.rightHipX, squatDepth * 0.22);
+    }
+
+    if (hasPosePoint(hipCenter) && hasPosePoint(shoulderCenter)) {
+      nextPose.rootX += clamp((Number(hipCenter.x) - Number(shoulderCenter.x)) * 0.65, -0.08, 0.08);
+    }
+
+    this.livePoseConfidence = poseConfidence;
+    this.livePoseState = nextPose;
+    return nextPose;
+  }
+
+  buildLiveStoryLine() {
+    const chapterTitle = this.storyChapter?.title || "Recovery World";
+    const actionLabel = String(this.currentActionLabel || this.currentActionId || "movement").toLowerCase();
+    const repsRemaining = Math.max(this.currentRepTarget - this.currentRepsDone, 0);
+    const trackingReady = this.targetTrackingConfidence >= this.requiredTracking;
+    const formReady = this.targetMatchScore >= this.requiredMatch;
+    const syncReady = this.targetMotionSync >= 68;
+    const poseLocked = this.livePoseConfidence >= 0.44;
+
+    if (!trackingReady || !poseLocked) {
+      return `${chapterTitle}: keep the full working side visible so the avatar can mirror your live motion.`;
+    }
+
+    if (formReady && syncReady && repsRemaining > 0) {
+      return `${chapterTitle}: live sync is locked on your ${actionLabel}. ${repsRemaining} more clean ${repsRemaining === 1 ? "rep" : "reps"} will raise the next structure in real time.`;
+    }
+
+    if (formReady) {
+      return `${chapterTitle}: the hero is echoing your ${actionLabel} right now. Return to the start with the same control to finish the build step.`;
+    }
+
+    if (this.targetRepFill > 0.42) {
+      return `${chapterTitle}: the world is reacting to your ${actionLabel}, but a bigger finish and cleaner reset will move the story forward.`;
+    }
+
+    return `${chapterTitle}: start the ${actionLabel} and guide the hero through the same path to wake the next part of the world.`;
+  }
+
   animateHero(t) {
     if (!this.heroRoot) {
       return;
@@ -960,6 +1248,33 @@ export class VirtualRecoveryWorld {
       rightArmX = cycle * 0.18;
     }
 
+    const livePose = this.resolveLivePoseState();
+    const liveRootBlend = clamp(
+      this.livePoseConfidence * clamp((this.trackingConfidence * 0.7 + this.motionSync * 0.3) / 100, 0, 1),
+      0,
+      1
+    );
+    const liveLimbBlend = clamp(
+      this.livePoseConfidence * clamp((this.trackingConfidence + 36) / 110, 0, 1),
+      0,
+      1
+    );
+
+    rootX = blendPoseValue(rootX, livePose.rootX, liveRootBlend);
+    rootY = blendPoseValue(rootY, livePose.rootY, liveRootBlend);
+    spinePitch = blendPoseValue(spinePitch, livePose.spinePitch, liveRootBlend);
+    chestYaw = blendPoseValue(chestYaw, livePose.chestYaw, liveRootBlend);
+    leftArmX = blendPoseValue(leftArmX, livePose.leftArmX, liveLimbBlend);
+    rightArmX = blendPoseValue(rightArmX, livePose.rightArmX, liveLimbBlend);
+    leftArmZ = blendPoseValue(leftArmZ, livePose.leftArmZ, liveLimbBlend);
+    rightArmZ = blendPoseValue(rightArmZ, livePose.rightArmZ, liveLimbBlend);
+    leftElbowX = blendPoseValue(leftElbowX, livePose.leftElbowX, liveLimbBlend);
+    rightElbowX = blendPoseValue(rightElbowX, livePose.rightElbowX, liveLimbBlend);
+    leftHipX = blendPoseValue(leftHipX, livePose.leftHipX, liveRootBlend);
+    rightHipX = blendPoseValue(rightHipX, livePose.rightHipX, liveRootBlend);
+    leftKneeX = blendPoseValue(leftKneeX, livePose.leftKneeX, liveRootBlend);
+    rightKneeX = blendPoseValue(rightKneeX, livePose.rightKneeX, liveRootBlend);
+
     this.heroRoot.position.x = lerp(this.heroRoot.position.x, rootX, 0.14);
     this.heroRoot.position.y = lerp(this.heroRoot.position.y, rootY, 0.14);
     this.hero.spinePivot.rotation.x = lerp(this.hero.spinePivot.rotation.x, spinePitch, 0.16);
@@ -976,10 +1291,10 @@ export class VirtualRecoveryWorld {
     this.hero.rightKnee.rotation.x = lerp(this.hero.rightKnee.rotation.x, rightKneeX, 0.18);
 
     if (this.hero.auraRing) {
-      const auraScale = 1 + this.actionEnergy * 0.22 + this.repBurst * 0.18;
+      const auraScale = 1 + this.actionEnergy * 0.22 + this.repBurst * 0.18 + liveLimbBlend * 0.08;
       this.hero.auraRing.scale.setScalar(auraScale);
       this.hero.auraRing.material.color.set(actionAccent(active));
-      this.hero.auraRing.material.opacity = 0.18 + this.actionEnergy * 0.16 + this.repBurst * 0.12;
+      this.hero.auraRing.material.opacity = 0.18 + this.actionEnergy * 0.16 + this.repBurst * 0.12 + liveRootBlend * 0.08;
     }
   }
 

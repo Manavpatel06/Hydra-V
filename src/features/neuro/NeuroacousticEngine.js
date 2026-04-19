@@ -2,7 +2,7 @@
 import { clamp } from "../../core/utils.js";
 
 export class NeuroacousticEngine {
-  constructor({ eventBus, selector, carrierHz = 220, masterGain = 0.24 }) {
+  constructor({ eventBus, selector, carrierHz = 220, masterGain = 0.28 }) {
     this.eventBus = eventBus;
     this.selector = selector;
     this.carrierHz = carrierHz;
@@ -60,9 +60,9 @@ export class NeuroacousticEngine {
     rightGain.gain.value = 0;
 
     const leftPan = this.audioContext.createStereoPanner();
-    leftPan.pan.value = -0.85;
+    leftPan.pan.value = -0.55;
     const rightPan = this.audioContext.createStereoPanner();
-    rightPan.pan.value = 0.85;
+    rightPan.pan.value = 0.55;
 
     const pulseOsc = this.audioContext.createOscillator();
     pulseOsc.type = "triangle";
@@ -71,12 +71,23 @@ export class NeuroacousticEngine {
     const pulseLevel = this.audioContext.createGain();
     pulseLevel.gain.value = 0;
 
+    const speakerCarrierOsc = this.audioContext.createOscillator();
+    speakerCarrierOsc.type = "triangle";
+    const speakerFilter = this.audioContext.createBiquadFilter();
+    speakerFilter.type = "bandpass";
+    speakerFilter.frequency.value = 196;
+    speakerFilter.Q.value = 0.92;
+    const speakerEnvelope = this.audioContext.createGain();
+    speakerEnvelope.gain.value = 0;
+    const speakerLevel = this.audioContext.createGain();
+    speakerLevel.gain.value = 0;
+
     const dynamics = this.audioContext.createDynamicsCompressor();
-    dynamics.threshold.value = -18;
-    dynamics.knee.value = 18;
-    dynamics.ratio.value = 2.6;
+    dynamics.threshold.value = -20;
+    dynamics.knee.value = 20;
+    dynamics.ratio.value = 3.2;
     dynamics.attack.value = 0.01;
-    dynamics.release.value = 0.22;
+    dynamics.release.value = 0.2;
 
     const master = this.audioContext.createGain();
     master.gain.setValueAtTime(0, now);
@@ -89,16 +100,21 @@ export class NeuroacousticEngine {
 
     pulseOsc.connect(pulseEnvelope);
     pulseEnvelope.connect(pulseLevel);
+    speakerCarrierOsc.connect(speakerFilter);
+    speakerFilter.connect(speakerEnvelope);
+    speakerEnvelope.connect(speakerLevel);
 
     leftPan.connect(dynamics);
     rightPan.connect(dynamics);
     pulseLevel.connect(dynamics);
+    speakerLevel.connect(dynamics);
     dynamics.connect(master);
     master.connect(this.audioContext.destination);
 
     leftOsc.start(now);
     rightOsc.start(now);
     pulseOsc.start(now);
+    speakerCarrierOsc.start(now);
 
     this.nodes = {
       leftOsc,
@@ -108,13 +124,18 @@ export class NeuroacousticEngine {
       pulseOsc,
       pulseEnvelope,
       pulseLevel,
+      speakerCarrierOsc,
+      speakerFilter,
+      speakerEnvelope,
+      speakerLevel,
       dynamics,
       master
     };
 
     this.applyCarrierAndBeat(this.carrierHz, this.currentBeatHz, 0);
-    this.setStereoVolume(0.28, 0.2);
-    this.setPulseVolume(0.92, 0.2);
+    this.setStereoVolume(0.24, 0.2);
+    this.setPulseVolume(0.96, 0.2);
+    this.setSpeakerVolume(0.66, 0.2);
   }
 
   setCarrierHz(carrierHz) {
@@ -156,6 +177,16 @@ export class NeuroacousticEngine {
     this.nodes.pulseLevel.gain.linearRampToValueAtTime(level, now + rampSeconds);
   }
 
+  setSpeakerVolume(value, rampSeconds = 0.2) {
+    if (!this.nodes) {
+      return;
+    }
+    const level = clamp(value, 0, 1);
+    const now = this.audioContext.currentTime;
+    this.nodes.speakerLevel.gain.cancelScheduledValues(now);
+    this.nodes.speakerLevel.gain.linearRampToValueAtTime(level, now + rampSeconds);
+  }
+
   triggerSpeakerPulse(intensity = 1) {
     if (!this.nodes || !this.audioContext) {
       return;
@@ -163,15 +194,26 @@ export class NeuroacousticEngine {
 
     const now = this.audioContext.currentTime;
     const amount = clamp(intensity, 0.18, 1);
-    const floor = 0.004;
-    const peak = 0.065 * amount;
-    const attack = 0.012;
-    const decay = clamp(0.085 - this.currentBeatHz * 0.0011, 0.03, 0.085);
+    const floor = 0.008;
+    const peak = 0.094 * amount;
+    const speakerFloor = 0.02;
+    const speakerPeak = 0.14 * amount;
+    const attack = 0.01;
+    const decay = clamp(0.09 - this.currentBeatHz * 0.001, 0.035, 0.09);
+    const speakerDecay = clamp(decay + 0.018, 0.05, 0.12);
 
     this.nodes.pulseEnvelope.gain.cancelScheduledValues(now);
     this.nodes.pulseEnvelope.gain.setValueAtTime(floor, now);
     this.nodes.pulseEnvelope.gain.linearRampToValueAtTime(peak, now + attack);
     this.nodes.pulseEnvelope.gain.exponentialRampToValueAtTime(Math.max(floor, peak * 0.16), now + decay);
+
+    this.nodes.speakerEnvelope.gain.cancelScheduledValues(now);
+    this.nodes.speakerEnvelope.gain.setValueAtTime(speakerFloor, now);
+    this.nodes.speakerEnvelope.gain.linearRampToValueAtTime(speakerPeak, now + attack);
+    this.nodes.speakerEnvelope.gain.exponentialRampToValueAtTime(
+      Math.max(speakerFloor, speakerPeak * 0.22),
+      now + speakerDecay
+    );
   }
 
   scheduleSpeakerPulse() {
@@ -217,11 +259,21 @@ export class NeuroacousticEngine {
     this.nodes.leftOsc.frequency.cancelScheduledValues(now);
     this.nodes.rightOsc.frequency.cancelScheduledValues(now);
     this.nodes.pulseOsc.frequency.cancelScheduledValues(now);
+    this.nodes.speakerCarrierOsc.frequency.cancelScheduledValues(now);
+    this.nodes.speakerFilter.frequency.cancelScheduledValues(now);
 
     this.nodes.leftOsc.frequency.linearRampToValueAtTime(leftFrequency, now + rampSeconds);
     this.nodes.rightOsc.frequency.linearRampToValueAtTime(rightFrequency, now + rampSeconds);
     this.nodes.pulseOsc.frequency.linearRampToValueAtTime(
       clamp(carrierHz * 0.5, 74, 164),
+      now + rampSeconds
+    );
+    this.nodes.speakerCarrierOsc.frequency.linearRampToValueAtTime(
+      clamp(carrierHz * 0.92, 108, 280),
+      now + rampSeconds
+    );
+    this.nodes.speakerFilter.frequency.linearRampToValueAtTime(
+      clamp(carrierHz * 1.05, 132, 420),
       now + rampSeconds
     );
 
@@ -274,9 +326,11 @@ export class NeuroacousticEngine {
       this.stopSpeakerPulseLoop();
       this.setStereoVolume(0, 0.25);
       this.setPulseVolume(0, 0.2);
+      this.setSpeakerVolume(0, 0.18);
     } else {
-      this.setStereoVolume(0.24, 0.25);
+      this.setStereoVolume(phase === "during" ? 0.26 : 0.22, 0.22);
       this.setPulseVolume(1, 0.15);
+      this.setSpeakerVolume(phase === "during" ? 0.88 : 0.76, 0.12);
       this.retargetBeat(phase);
       this.startSpeakerPulseLoop();
     }

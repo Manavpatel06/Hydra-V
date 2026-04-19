@@ -297,7 +297,8 @@ const motionAdapter = DEFAULTS.game.useMirrorMotionAdapter
   ? new MirrorMotionAdapter()
   : null;
 const threeRecoveryWorld = new VirtualRecoveryWorld({
-  canvasEl: elements.virtualGameCanvas
+  canvasEl: elements.virtualGameCanvas,
+  getPoseLandmarks: () => auraScanEngine.getLatestPoseLandmarks()
 });
 const splineRecoveryWorld = new SplineRecoveryWorld({
   canvasEl: elements.virtualGameCanvas,
@@ -375,7 +376,8 @@ const gameEngine = new RecoveryGameEngine({
     const stats = activeRecoveryWorld?.getBuildStats?.();
     const actionImpact = describeActionImpact(payload.actionId);
     const movementFeedback = buildGameMovementFeedback(payload);
-    const storyLine = stats?.story?.line ? ` ${stats.story.line}` : "";
+    const storyLineValue = stats?.liveStory?.line || stats?.story?.line || "";
+    const storyLine = storyLineValue ? ` ${storyLineValue}` : "";
     const repMarker = `${payload.actionId || "none"}:${payload.repsDone || 0}`;
     if ((payload.repsDone || 0) > 0 && repMarker !== lastGameRepMarker) {
       lastGameRepMarker = repMarker;
