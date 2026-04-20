@@ -6,70 +6,17 @@
   <title>HYDRA-V | Recovery Flow Runtime</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./style.css">
 
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 </head>
 <body>
-  <section id="patient-entry-screen" class="patient-entry-screen">
-    <div class="patient-entry-grid">
-      <article class="patient-entry-copy">
-        <p class="patient-entry-kicker">HYDRA-V Continuity Runtime</p>
-        <h1>Start A Patient Recovery Session</h1>
-        <p class="patient-entry-text">
-          Enter a patient ID to retrieve prior continuity, launch the Aura intake, and keep the session history tied to the same recovery profile.
-        </p>
-
-        <div class="patient-entry-signals">
-          <div>
-            <span>1</span>
-            <strong>Aura Intake</strong>
-            <p>Body-map baseline, vitals, readiness, and target zone detection.</p>
-          </div>
-          <div>
-            <span>2</span>
-            <strong>Recovery Game</strong>
-            <p>Movement-matched reps, world-building mechanics, and neuro entrainment.</p>
-          </div>
-          <div>
-            <span>3</span>
-            <strong>Continuity Analysis</strong>
-            <p>Compare today against previous patient sessions and adapt the next protocol.</p>
-          </div>
-        </div>
-      </article>
-
-      <article class="patient-entry-card">
-        <div class="panel-head">
-          <h2>Patient Lookup</h2>
-          <p>Returning IDs restore prior session history automatically.</p>
-        </div>
-
-        <label class="field patient-id-field">
-          <span>Patient ID</span>
-          <input id="patient-id-input" type="text" maxlength="32" autocomplete="off" placeholder="PT-042">
-        </label>
-
-        <article id="patient-lookup-status" class="analysis-box patient-lookup-box">
-          <h4>Continuity Status</h4>
-          <p id="patient-lookup-summary">Enter a patient ID to retrieve previous sessions before starting.</p>
-          <ul id="patient-lookup-list" class="text-list"></ul>
-        </article>
-
-        <div class="button-row patient-entry-actions">
-          <button id="patient-start-session" type="button">Start Session</button>
-        </div>
-      </article>
-    </div>
-  </section>
-
-  <main id="app-shell" class="app-shell hidden">
+  <main id="app-shell" class="app-shell">
     <header class="hero">
-      <p class="kicker">HYDRA-V</p>
-      <div class="hero-patient">
-        <span class="label">Patient</span>
-        <strong id="hero-patient-id">--</strong>
-      </div>
+      <p class="kicker">HYDRA-V AR FITNESS SYSTEM v2.1</p>
       <h1>Scan -> Recover -> Build</h1>
       <p class="subtitle">
         60-second biometric intake, anatomy body-map targeting, and a movement-driven 3D recovery world.
@@ -227,7 +174,7 @@
             </div>
           </div>
 
-          <aside id="game-build-panel" class="game-build-panel">
+          <aside class="game-build-panel">
             <h4>Build Progress</h4>
             <div class="world-overall">
               <span>Overall</span>
@@ -238,8 +185,8 @@
             </div>
             <div class="world-sections">
               <div><span>Formation</span><strong id="world-build-formation">0 / 9</strong></div>
-              <div><span>Walls</span><strong id="world-build-walls">0 / 16</strong></div>
-              <div><span>Roof</span><strong id="world-build-roof">0 / 9</strong></div>
+              <div><span>Walls</span><strong id="world-build-walls">0 / 14</strong></div>
+              <div><span>Roof</span><strong id="world-build-roof">0 / 8</strong></div>
               <div><span>Peak</span><strong id="world-build-peak">0 / 1</strong></div>
             </div>
             <h5>Action Log</h5>
@@ -309,7 +256,6 @@
 
             <div class="button-row">
               <button id="game-start-button" type="button">Start Guided Game</button>
-              <button id="game-skip-button" type="button" class="ghost">Skip Current Exercise</button>
               <button id="game-stop-button" type="button" class="ghost">Stop Game</button>
             </div>
           </div>
@@ -378,11 +324,6 @@
         <article class="summary-card">
           <h3>Live Gameplay Impact</h3>
           <ul id="summary-live-impact" class="text-list"></ul>
-
-          <h4>Patient Continuity</h4>
-          <p id="patient-history-summary" class="summary-analysis-text">Start a session with a patient ID to compare against prior visits.</p>
-          <ul id="patient-history-list" class="text-list"></ul>
-
           <div class="hidden">
             <canvas id="garden-canvas" class="garden-canvas" width="900" height="420"></canvas>
             <div id="garden-milestones" class="milestones"></div>
