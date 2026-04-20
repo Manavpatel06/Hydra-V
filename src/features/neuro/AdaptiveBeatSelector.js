@@ -1,17 +1,36 @@
 import { clamp, round } from "../../core/utils.js";
 
+const PHASE_TARGETS = Object.freeze({
+  pre: {
+    baseHz: 10.5,
+    minHz: 9.2,
+    maxHz: 11.8
+  },
+  during: {
+    // Workout phase: hold the active game in an alert, movement-focused low-beta / SMR band.
+    baseHz: 15,
+    minHz: 13.5,
+    maxHz: 16.5
+  },
+  post: {
+    baseHz: 8.2,
+    minHz: 6.8,
+    maxHz: 9.2
+  },
+  idle: {
+    baseHz: 10,
+    minHz: 8,
+    maxHz: 12
+  }
+});
+
 export class AdaptiveBeatSelector {
+  getPhaseTarget(phase) {
+    return PHASE_TARGETS[phase] || PHASE_TARGETS.idle;
+  }
+
   getPhaseBaselineHz(phase) {
-    if (phase === "pre") {
-      return 40;
-    }
-    if (phase === "during") {
-      return 6;
-    }
-    if (phase === "post") {
-      return 10;
-    }
-    return 10;
+    return this.getPhaseTarget(phase).baseHz;
   }
 
   calculateArousal(biometrics = {}) {
@@ -33,7 +52,8 @@ export class AdaptiveBeatSelector {
 
   selectTarget({ phase, biometrics, currentBeatHz }) {
     const arousalIndex = this.calculateArousal(biometrics);
-    const phaseBaseline = this.getPhaseBaselineHz(phase);
+    const targetWindow = this.getPhaseTarget(phase);
+    const phaseBaseline = targetWindow.baseHz;
     const beatNow = Number.isFinite(currentBeatHz) ? currentBeatHz : phaseBaseline;
 
     let rawTargetHz = phaseBaseline;
@@ -42,15 +62,16 @@ export class AdaptiveBeatSelector {
     if (arousalIndex !== null) {
       personalized = true;
       if (phase === "pre") {
-        rawTargetHz = 40 + (arousalIndex - 0.5) * 4;
+        rawTargetHz = targetWindow.maxHz - (arousalIndex * (targetWindow.maxHz - targetWindow.minHz));
       } else if (phase === "during") {
-        rawTargetHz = 4 + arousalIndex * 4;
+        // Lower arousal gets a slightly stronger drive; higher arousal stays sharp without overshooting.
+        rawTargetHz = targetWindow.maxHz - (arousalIndex * (targetWindow.maxHz - targetWindow.minHz));
       } else if (phase === "post") {
-        rawTargetHz = 10 + (arousalIndex - 0.5) * 2;
+        rawTargetHz = targetWindow.maxHz - (arousalIndex * (targetWindow.maxHz - targetWindow.minHz));
       }
     }
 
-    const boundedTarget = clamp(rawTargetHz, 2, 45);
+    const boundedTarget = clamp(rawTargetHz, targetWindow.minHz, targetWindow.maxHz);
     const smoothedTarget = beatNow + (boundedTarget - beatNow) * 0.35;
 
     return {
