@@ -2237,21 +2237,6 @@ function bindEvents() {
     setPill(elements.neuroPhasePill, phase.toUpperCase(), phase === "idle" ? "idle" : "live");
   });
 
-  eventBus.on(EVENTS.NEURO_BEAT_UPDATED, (event) => {
-    const phase = event.detail.phase || "idle";
-    const beatHz = Number(event.detail.beatHz);
-
-    if (phase === "idle") {
-      setPill(elements.neuroPhasePill, "IDLE", "idle");
-      return;
-    }
-
-    const label = Number.isFinite(beatHz)
-      ? `${phase.toUpperCase()} ${round(beatHz, 1)} Hz`
-      : phase.toUpperCase();
-    setPill(elements.neuroPhasePill, label, "live");
-  });
-
   eventBus.on(EVENTS.VOICE_NOTE_READY, () => {
     setPill(elements.voiceStatusPill, "Delivered", "live");
   });
